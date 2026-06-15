@@ -1,0 +1,4 @@
+
+--- TESTING MAP COMPANY ON BACKEND ---
+Response Status: 401
+Response Data: {"success":false,"statusCode":401,"message":"No token provided","timestamp":"2026-03-25T00:11:51","path":"/api/customers/11240/map-company"}

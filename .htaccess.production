@@ -1,0 +1,18 @@
+# ABS Cloud Deployment .htaccess
+# Handles React routing and proxies /api to port 3001
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Proxy /api calls to the backend running on port 3001
+  # Note: This requires mod_proxy to be enabled on cPanel. 
+  RewriteRule ^api/(.*)$ http://localhost:3001/api/$1 [P,L]
+
+  # For React routing: If the request is not a file or directory, serve index.html
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_FILENAME} !-l
+  RewriteRule . /index.html [L]
+</IfModule>

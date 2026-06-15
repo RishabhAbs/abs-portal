@@ -1,0 +1,1 @@
+src/pages/Activities.tsx(1301,67): error TS2339: Property 'message' does not exist on type '{ success: boolean; data: any; }'.

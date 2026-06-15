@@ -1,0 +1,38 @@
+CREATE TABLE `billingcompany` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `email` varchar(255) NOT NULL,
+  `mobile` varchar(255) NOT NULL,
+  `address1` text NOT NULL,
+  `address2` text NOT NULL,
+  `city` varchar(255) NOT NULL,
+  `state` int NOT NULL,
+  `pincode` varchar(255) NOT NULL,
+  `gstin` varchar(255) NOT NULL,
+  `domain` text NOT NULL,
+  `date` date NOT NULL,
+  `bank_acc_name` varchar(255) NOT NULL,
+  `bank_name` varchar(255) NOT NULL,
+  `bank_branch` varchar(255) NOT NULL,
+  `bank_ifsc` varchar(255) NOT NULL,
+  `bank_acc` varchar(255) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=latin1
+
+CREATE TABLE `billingitem` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `productid` int DEFAULT NULL,
+  `serialid` int DEFAULT NULL,
+  `expiry` date DEFAULT NULL,
+  `newexpiry` date DEFAULT NULL,
+  `incrate` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `rate` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `qty` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `amount` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `commission` int DEFAULT NULL,
+  `cstatus` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT 'UNPAID',
+  `cdiscount` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `remark` varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT NULL,
+  `billingid` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=16021 DEFAULT CHARSET=latin1

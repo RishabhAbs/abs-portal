@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Build
+dist/
+build/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temp Scripts
+fix_activities*.js
+
+# SQL dumps & large assets
+*.sql
+*.apk
+backend/uploads/
+backend/public/
+
+# Deploy artifacts & secrets
+*.zip
+*.bak
+*.bak.xlsx
+backend/.env.production
+backend/uploads/

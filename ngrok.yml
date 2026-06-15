@@ -1,0 +1,6 @@
+version: "2"
+authtoken: 37Wh4Xo2ahy2UKVkSKqoCV43P7b_32aU7PUS55mkJTLc8xvGe
+tunnels:
+  frontend:
+    proto: http
+    addr: localhost:3000

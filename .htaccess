@@ -1,0 +1,46 @@
+# ABS Cloud Deployment .htaccess
+# Apache 2.4 compatible — React SPA + Node.js API proxy
+
+Options -Indexes
+
+# Force correct MIME types
+AddType application/javascript .js .mjs
+AddType text/css .css
+AddType application/json .json
+AddType image/svg+xml .svg
+AddType application/font-woff2 .woff2
+AddType application/font-woff .woff
+
+# Grant access to all static files (Apache 2.4 syntax)
+<FilesMatch "\.(js|mjs|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|mp3|json|txt|apk|map)$">
+  <IfModule mod_authz_core.c>
+    Require all granted
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. Serve existing files and directories directly (JS, CSS, images, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # 2. Proxy /api/* to Node.js backend on port 5000
+  RewriteRule ^api/(.*)$ http://127.0.0.1:5000/api/$1 [P,L]
+
+  # 3. Everything else → React SPA
+  RewriteRule ^ /index.html [L]
+</IfModule>
+
+# Browser caching for static assets
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType application/javascript  "access plus 1 year"
+  ExpiresByType text/css               "access plus 1 year"
+  ExpiresByType image/png              "access plus 1 month"
+  ExpiresByType image/jpeg             "access plus 1 month"
+  ExpiresByType image/svg+xml         "access plus 1 month"
+  ExpiresByType image/x-icon           "access plus 1 year"
+</IfModule>

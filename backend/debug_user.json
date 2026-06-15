@@ -1,0 +1,353 @@
+{
+  "id": "USR014",
+  "name": "Aarti Chaudhary",
+  "email": "aarti@abstechnologies.org.in",
+  "role": "user",
+  "status": "active",
+  "permissions": {
+    "servers": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "export": false,
+      "bulk_renewal": false
+    },
+    "customers_our": {
+      "view": true,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "export": false
+    },
+    "customers_not_our": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "export": false
+    },
+    "customer_search": {
+      "view": true,
+      "copy": true,
+      "edit": false,
+      "view_all_groups": true
+    },
+    "mappings": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "export": false,
+      "bulk_renewal": false
+    },
+    "users": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false
+    },
+    "tasks": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": true,
+      "checkin": true,
+      "view_history": true
+    },
+    "visits_our": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "checkin": false,
+      "force_checkin": false,
+      "pause": false
+    },
+    "visits_not_our": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "checkin": false,
+      "force_checkin": false,
+      "pause": false
+    },
+    "pincodes": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false
+    },
+    "activities": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "export": false
+    },
+    "tdl": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "add_requirement": false,
+      "delete_requirement": false,
+      "add_task": false
+    },
+    "service_calls": {
+      "view": true,
+      "create": true,
+      "take": true,
+      "close": true,
+      "transfer": true,
+      "cancel": true,
+      "view_all": false,
+      "edit": true,
+      "delete": false
+    },
+    "leads": {
+      "view": true,
+      "create": true,
+      "take": true,
+      "close": true,
+      "transfer": true,
+      "cancel": true,
+      "view_all": false
+    },
+    "service_followup": {
+      "view": false,
+      "confirm": false,
+      "reopen": false
+    },
+    "expiry_renew_our": {
+      "view": true,
+      "copy": true,
+      "view_all_groups": false
+    },
+    "expiry_renew_not_our": {
+      "view": true,
+      "copy": true,
+      "view_all_groups": false
+    },
+    "call_report": {
+      "view": false
+    },
+    "my_requirements": {
+      "cloud": false,
+      "tally": false,
+      "tdl": false,
+      "webapp": false
+    }
+  },
+  "column_permissions": {
+    "servers": {
+      "visible": [
+        "company",
+        "sof_id",
+        "server_ip",
+        "customer_ip",
+        "port",
+        "admin",
+        "password",
+        "mapped",
+        "bu",
+        "pu",
+        "rate",
+        "expiry",
+        "created"
+      ],
+      "copyable": []
+    },
+    "customer_search": {
+      "visible": [
+        "company",
+        "person",
+        "mobile",
+        "email",
+        "status",
+        "city"
+      ],
+      "copyable": []
+    },
+    "customer_search_contacts": {
+      "visible": [
+        "person",
+        "phone",
+        "primary",
+        "status",
+        "company"
+      ],
+      "copyable": []
+    },
+    "customer_search_mapped": {
+      "visible": [
+        "company",
+        "group",
+        "status",
+        "type",
+        "email",
+        "gstin",
+        "pincode",
+        "city",
+        "state"
+      ],
+      "copyable": []
+    },
+    "customer_search_tally": {
+      "visible": [
+        "tally_serial",
+        "expiry",
+        "active",
+        "status",
+        "flavor",
+        "release",
+        "renewal",
+        "mau",
+        "qau",
+        "remark"
+      ],
+      "copyable": []
+    },
+    "customer_search_cloud": {
+      "visible": [
+        "server_ip",
+        "customer_ip",
+        "serial",
+        "users",
+        "status",
+        "cycle",
+        "rate",
+        "expiry",
+        "credentials"
+      ],
+      "copyable": []
+    },
+    "mappings": {
+      "visible": [
+        "company",
+        "customer_ip",
+        "email",
+        "activation",
+        "serial_no",
+        "bu",
+        "expiry",
+        "cycle",
+        "rate"
+      ],
+      "copyable": []
+    },
+    "activities": {
+      "visible": [
+        "customer",
+        "server_ip",
+        "sof_no",
+        "date",
+        "type",
+        "bill_type",
+        "cycle",
+        "mode",
+        "start",
+        "expiry",
+        "users",
+        "rate",
+        "amount"
+      ],
+      "copyable": []
+    },
+    "tasks_active": {
+      "visible": [
+        "customer",
+        "type",
+        "staff",
+        "added",
+        "in_time",
+        "out_time",
+        "remark"
+      ],
+      "copyable": []
+    },
+    "tasks_completed": {
+      "visible": [
+        "checkout_date",
+        "customer",
+        "staff",
+        "type",
+        "in_time",
+        "out_time",
+        "remark",
+        "response",
+        "loyalty",
+        "biz_type",
+        "einvoice",
+        "acct_person",
+        "it_person",
+        "ca_name",
+        "eway_bill",
+        "banking",
+        "whatsapp",
+        "custom",
+        "tally_slow"
+      ],
+      "copyable": []
+    },
+    "pending_visits": {
+      "visible": [
+        "customer",
+        "staff",
+        "added",
+        "in_time",
+        "out_time",
+        "remark"
+      ],
+      "copyable": []
+    },
+    "service_calls": {
+      "visible": [
+        "sr",
+        "company",
+        "created_by",
+        "mobile",
+        "sn",
+        "type",
+        "add_by",
+        "handle_by",
+        "next_date",
+        "status",
+        "complete_by",
+        "remark"
+      ],
+      "copyable": []
+    },
+    "users": {
+      "visible": [
+        "name",
+        "role",
+        "two_fa",
+        "status"
+      ],
+      "copyable": []
+    },
+    "customization": {
+      "visible": [
+        "customer_name",
+        "person_name",
+        "phone",
+        "handled_by",
+        "status",
+        "amount",
+        "submission_date",
+        "overdue_days"
+      ],
+      "copyable": []
+    }
+  },
+  "created_at": "2026-03-06 12:17:51",
+  "updated_at": "2026-04-24 13:27:05",
+  "is_two_fa_enabled": true,
+  "tag": "Inside",
+  "adminId": null,
+  "adminName": "Aarti Chaudhary",
+  "sessionId": "cab791f2-7f68-42ba-91d0-64c2ec869788",
+  "deviceType": "web"
+}
