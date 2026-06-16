@@ -233,7 +233,7 @@ export default function GroupSummary() {
   const ledgerPageRows   = printing ? ledgerSorted : ledgerSorted.slice(ledgerStartIdx, ledgerEndIdx);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full">
+    <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
       <div className="print-only mb-3 px-3" aria-hidden>
         <h1 className="text-xl font-bold mb-1">Group Summary</h1>
         <div className="text-sm">
@@ -319,7 +319,7 @@ export default function GroupSummary() {
       {!drilledGroup ? (
         <>
           {/* Mobile flat list — group summary view */}
-          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
             {loading ? (
               <div className="text-center text-gray-400 py-8">Loading…</div>
             ) : sorted.length === 0 ? (
@@ -468,7 +468,7 @@ export default function GroupSummary() {
       ) : (
         <>
           {/* Mobile flat list — ledger detail view */}
-          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
             {ledgerLoading ? (
               <div className="text-center text-gray-400 py-8">Loading…</div>
             ) : ledgerSorted.length === 0 ? (

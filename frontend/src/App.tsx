@@ -52,6 +52,8 @@ import GroupSummary from './pages/GroupSummary';
 import StockSummary from './pages/StockSummary';
 import UserWiseOutstanding from './pages/UserWiseOutstanding';
 import PrintVoucher from './pages/PrintVoucher';
+import BillReport from './pages/BillReport';
+import PaymentReport from './pages/PaymentReport';
 import Items from './pages/Items';
 import LedgerGroup from './pages/LedgerGroup';
 import ItemGroup from './pages/ItemGroup';
@@ -209,6 +211,8 @@ function App() {
                   <Route path="print-voucher/:id" element={<PermissionGuard entity={['vouchers', 'reports_daybook']}><PrintVoucher /></PermissionGuard>} />
                   <Route path="daybook" element={<PermissionGuard entity="reports_daybook"><Daybook /></PermissionGuard>} />
                   <Route path="pending-review" element={<PermissionGuard entity={['reports_daybook', 'vouchers']}><PendingReview /></PermissionGuard>} />
+                  <Route path="bill-report" element={<PermissionGuard entity="reports_daybook"><BillReport /></PermissionGuard>} />
+                  <Route path="payment-report" element={<PermissionGuard entity="reports_daybook"><PaymentReport /></PermissionGuard>} />
                   <Route path="items" element={<PermissionGuard entity="items"><Items /></PermissionGuard>} />
                   <Route path="ledger-groups" element={<PermissionGuard entity="ledger_groups"><LedgerGroup /></PermissionGuard>} />
                   <Route path="item-groups" element={<PermissionGuard entity="items"><ItemGroup /></PermissionGuard>} />

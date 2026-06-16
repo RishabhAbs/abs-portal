@@ -15,7 +15,6 @@ const TARGET_CATEGORIES: { key: string; label: string }[] = [
   { key: 'tss',        label: 'TSS' },
   { key: 'cloud',      label: 'CLOUD' },
   { key: 'tdl',        label: 'TDL' },
-  { key: 'app',        label: 'WEB/APP' },
   { key: 'visit',      label: 'VISIT' },
   { key: 'call',       label: 'CALL' },
 ];

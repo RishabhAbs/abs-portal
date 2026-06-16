@@ -269,7 +269,7 @@ export default function Daybook() {
     // table wrapper is `flex-1 overflow-auto` so rows scroll *inside* it,
     // pinning the toolbar AND the thead together. Desktop subtracts an
     // extra 8px for the main element's md:p-1 padding around it.
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full">
+    <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
       {/* ── Header bar ── */}
       <div className="flex-none bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between print:hidden">
         <div className="flex items-center gap-1">
@@ -296,8 +296,8 @@ export default function Daybook() {
         </div>
       </div>
 
-      {/* ── Stats bar ── */}
-      <div className="flex-none bg-white border-b border-slate-200 print:hidden">
+      {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
+      <div className="hidden sm:block flex-none bg-white border-b border-slate-200 print:hidden">
         <div className="flex divide-x divide-slate-200">
           <div className="flex-1 px-3 py-2.5">
             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Debit</div>
@@ -364,7 +364,7 @@ export default function Daybook() {
       )}
 
       {/* ── Mobile: Tally-style flat list ── */}
-      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
         {loading ? (
           <div className="text-center text-slate-400 py-10 text-sm">Loading…</div>
         ) : filteredRows.length === 0 ? (

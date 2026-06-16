@@ -139,7 +139,7 @@ export default function UserWiseOutstanding() {
   const pageRows = printing ? sorted : sorted.slice(startIdx, endIdx);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full">
+    <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
       <div className="print-only mb-3 px-3" aria-hidden>
         <h1 className="text-xl font-bold mb-1">User-wise Pending Payment</h1>
         <div className="text-sm">As of {displayDate(asOf)}</div>
@@ -183,8 +183,8 @@ export default function UserWiseOutstanding() {
         </div>
       </div>
 
-      {/* ── Stats bar (permanent) ── */}
-      <div className="flex-none bg-white border-b border-slate-200 print:hidden">
+      {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
+      <div className="hidden sm:block flex-none bg-white border-b border-slate-200 print:hidden">
         <div className="flex divide-x divide-slate-200">
           <div className="flex-1 px-3 py-2.5">
             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Total Due</div>
@@ -267,7 +267,7 @@ export default function UserWiseOutstanding() {
       </div>
 
       {/* ── Mobile flat list (hidden on sm+) ── */}
-      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
         {loading ? (
           <div className="text-center text-gray-400 py-8 text-[13px]">Loading…</div>
         ) : pageRows.length === 0 ? (

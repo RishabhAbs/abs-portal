@@ -212,7 +212,7 @@ export default function SalesRegister() {
   const headBtn = 'flex items-center select-none cursor-pointer hover:text-blue-700';
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full">
+    <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
       {/* Print-only header */}
       <div className="print-only mb-3 px-3" aria-hidden>
         <h1 className="text-xl font-bold mb-1">Sales Register</h1>
@@ -335,7 +335,7 @@ function MonthlyView({
   return (
     <>
       {/* Mobile flat list — monthly view */}
-      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
         {loading ? (
           <div className="text-center text-gray-400 py-8">Loading…</div>
         ) : monthRows.length === 0 ? (
@@ -467,8 +467,32 @@ function DetailView({
 }) {
   return (
     <>
-      {/* Totals strip */}
-      <div className="flex-none flex flex-wrap items-stretch gap-0 border-x border-slate-300 bg-white text-[13px] mx-3 print:mx-0 print:border-slate-400">
+      {/* Totals strip — mobile gets a 3-col grid (label-over-value) so the
+          6 stats settle into a clean 2-row block instead of ragged
+          flex-wrapping, with Vouchers as its own full-width row below.
+          sm+ keeps the original single-row flex strip unchanged. */}
+      <div className="sm:hidden flex-none rounded-lg border border-slate-200 bg-white shadow-sm mx-3 overflow-hidden print:hidden">
+        {/* Hero row — Total is the headline figure, Vouchers count rides alongside */}
+        <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-blue-50/60 border-b border-slate-200">
+          <div>
+            <div className="text-slate-400 uppercase text-[10px] font-bold tracking-wide">Total</div>
+            <div className="tabular-nums text-[18px] font-bold text-blue-700 leading-tight">{fmt(totals.total)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-slate-400 uppercase text-[10px] font-bold tracking-wide">Vouchers</div>
+            <div className="tabular-nums text-[18px] font-bold text-slate-700 leading-tight">{totalRows}</div>
+          </div>
+        </div>
+        {/* Secondary breakdown — smaller, evenly spaced, negative values flagged in red */}
+        <div className="grid grid-cols-5 divide-x divide-slate-100">
+          <MiniStat label="Taxable" value={totals.taxable} />
+          <MiniStat label="CGST"    value={totals.cgst} />
+          <MiniStat label="SGST"    value={totals.sgst} />
+          <MiniStat label="IGST"    value={totals.igst} />
+          <MiniStat label="Other"   value={totals.other} />
+        </div>
+      </div>
+      <div className="hidden sm:flex flex-none flex-wrap items-stretch gap-0 border-x border-slate-300 bg-white text-[13px] mx-3 print:flex print:mx-0 print:border-slate-400">
         <Stat label="Taxable" value={totals.taxable} color="text-slate-800" />
         <Stat label="CGST"    value={totals.cgst}    color="text-slate-700" />
         <Stat label="SGST"    value={totals.sgst}    color="text-slate-700" />
@@ -482,7 +506,7 @@ function DetailView({
       </div>
 
       {/* Mobile flat list — detail view */}
-      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
         {loading ? (
           <div className="text-center text-gray-400 py-8">Loading…</div>
         ) : rows.length === 0 ? (
@@ -493,21 +517,27 @@ function DetailView({
               <div key={r.vch_id}
                 className="border-b border-gray-200 cursor-pointer active:bg-blue-50"
                 onClick={() => openVoucher(r.vch_id)}>
-                <div className="flex items-start justify-between px-4 py-3">
-                  <div>
-                    <div className="font-bold text-gray-900 text-[15px] uppercase">
-                      {r.vch_type_name || 'SALES'}
+                <div className="px-4 pt-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <span className="font-bold text-gray-900 text-[15px] uppercase truncate block">
+                        {r.vch_type_name || 'SALES'}
+                      </span>
+                      <div className="text-[13px] text-gray-600 mt-1 truncate">{r.party_name}</div>
                     </div>
-                    <div className="text-[13px] text-gray-500 mt-0.5">
-                      {displayDate(r.vch_date)}&nbsp;&nbsp;|&nbsp;&nbsp;{r.party_name}&nbsp;&nbsp;#{r.vch_no || '—'}
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-[15px] font-bold text-gray-900 tabular-nums whitespace-nowrap">
+                        {fmt(r.total_amount)}
+                      </div>
+                      <div className="text-[12px] text-gray-400 whitespace-nowrap mt-1">
+                        {displayDate(r.vch_date)}
+                      </div>
                     </div>
-                    {r.party_gst && (
-                      <div className="text-[13px] text-gray-500">{r.party_gst}</div>
-                    )}
                   </div>
-                  <span className="text-[15px] font-medium text-gray-900 tabular-nums whitespace-nowrap ml-3">
-                    {fmt(r.total_amount)}
-                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 px-4 pb-3 mt-0.5 text-[12px] text-gray-400">
+                  <span className="truncate">#{r.vch_no || '—'}</span>
+                  {r.party_gst && <span className="truncate flex-shrink-0">{r.party_gst}</span>}
                 </div>
               </div>
             ))}
@@ -529,6 +559,7 @@ function DetailView({
               <th className={`${headCell} text-left`}>
                 <div className={headBtn} onClick={() => toggleSort('party_name')}>Party<SortIcon col="party_name" /></div>
               </th>
+              <th className={`${headCell} text-left w-24`}>State</th>
               <th className={`${headCell} text-left w-32`}>GSTIN</th>
               <th className={`${headCell} text-right w-28`}>
                 <div className={headBtn + ' justify-end'} onClick={() => toggleSort('taxable_amount')}>Taxable<SortIcon col="taxable_amount" /></div>
@@ -545,9 +576,9 @@ function DetailView({
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={11} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
+              <tr><td colSpan={12} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={11} className={`${cell} text-center text-slate-400 py-6`}>No sales vouchers in {MONTHS_LONG[detailMonth.month - 1]} {detailMonth.year}</td></tr>
+              <tr><td colSpan={12} className={`${cell} text-center text-slate-400 py-6`}>No sales vouchers in {MONTHS_LONG[detailMonth.month - 1]} {detailMonth.year}</td></tr>
             ) : (
               rows.map((r, i) => {
                 const rowIdx = printing ? i : startIdx + i;
@@ -561,10 +592,8 @@ function DetailView({
                         {r.vch_no || '—'}
                       </button>
                     </td>
-                    <td className={`${cell} text-slate-800 font-medium`}>
-                      {r.party_name}
-                      {r.party_state && <span className="ml-2 text-[10px] text-slate-500">{r.party_state}</span>}
-                    </td>
+                    <td className={`${cell} text-slate-800 font-medium`}>{r.party_name}</td>
+                    <td className={`${cell} text-slate-600 text-[12px] whitespace-nowrap`}>{r.party_state || '—'}</td>
                     <td className={`${cell} text-slate-600 text-[12px] tabular-nums whitespace-nowrap`}>{r.party_gst || '—'}</td>
                     <td className={cellNum + ' text-slate-800'}>{fmt(r.taxable_amount)}</td>
                     <td className={cellNum + ' text-slate-700'}>{r.cgst_amount > 0 ? fmt(r.cgst_amount) : <span className="text-slate-300">—</span>}</td>
@@ -586,7 +615,7 @@ function DetailView({
           {totalRows > 0 && (
             <tfoot>
               <tr className="bg-slate-200 font-bold sticky bottom-0">
-                <td colSpan={4} className={`${cell} text-slate-700`}>Total ({totalRows} vouchers)</td>
+                <td colSpan={5} className={`${cell} text-slate-700`}>Total ({totalRows} vouchers)</td>
                 <td className={cellNum + ' text-slate-800'}>{fmt(totals.taxable)}</td>
                 <td className={cellNum + ' text-slate-700'}>{fmt(totals.cgst)}</td>
                 <td className={cellNum + ' text-slate-700'}>{fmt(totals.sgst)}</td>
@@ -648,11 +677,33 @@ function DetailView({
   );
 }
 
-function Stat({ label, value, color, bold }: { label: string; value: number; color: string; bold?: boolean }) {
+function Stat({ label, value, color, bold, stacked, compact }: { label: string; value: number; color: string; bold?: boolean; stacked?: boolean; compact?: boolean }) {
+  if (stacked) {
+    return (
+      <div className={`flex flex-col items-center justify-center ${compact ? 'gap-0 px-1.5 py-1' : 'gap-0.5 px-2 py-2'}`}>
+        <span className={`text-slate-500 uppercase font-bold tracking-wide ${compact ? 'text-[9px]' : 'text-[10px]'}`}>{label}</span>
+        <span className={`tabular-nums ${compact ? 'text-[11px]' : 'text-[12px]'} ${bold ? 'font-bold' : 'font-semibold'} ${color}`}>{fmt(value)}</span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center gap-2 px-3 py-2 border-r border-slate-300">
       <span className="text-slate-500 uppercase text-[11px] font-bold tracking-wide">{label}</span>
       <span className={`tabular-nums ${bold ? 'font-bold' : 'font-semibold'} ${color}`}>{fmt(value)}</span>
+    </div>
+  );
+}
+
+// Small secondary-stat cell for the mobile totals card — negative values are
+// flagged red so they read as a deliberate credit/adjustment, not a glitch.
+function MiniStat({ label, value }: { label: string; value: number }) {
+  const negative = value < 0;
+  return (
+    <div className="flex flex-col items-center justify-center gap-0 px-1 py-2">
+      <span className="text-slate-400 uppercase text-[9px] font-bold tracking-wide">{label}</span>
+      <span className={`tabular-nums text-[11px] font-semibold ${negative ? 'text-red-600' : 'text-slate-700'}`}>
+        {fmt(value)}
+      </span>
     </div>
   );
 }

@@ -463,7 +463,7 @@ export default function PrintVoucher() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full bg-slate-100">
+    <div className="flex flex-col w-full bg-slate-100 fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto print:static print:h-auto" style={{ overscrollBehavior: "contain" }}>
       {/* Toolbar — picker + print button. Hidden on print. */}
       <div className="flex-none bg-slate-50 px-3 pt-2 pb-2 border-b border-slate-200 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">

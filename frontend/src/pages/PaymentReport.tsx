@@ -205,7 +205,7 @@ const PaymentReport: React.FC = () => {
     ].filter(Boolean).join(' | ');
 
     return (
-        <div className="h-full flex flex-col bg-white">
+        <div className="flex flex-col bg-white fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
 
             {/* ── Header bar ── */}
             <div className="flex-none bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
@@ -233,8 +233,8 @@ const PaymentReport: React.FC = () => {
                 </div>
             </div>
 
-            {/* ── Stats bar ── */}
-            <div className="flex-none bg-white border-b border-gray-200">
+            {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
+            <div className="hidden sm:block flex-none bg-white border-b border-gray-200">
                 <div className="flex divide-x divide-gray-200">
                     <div className="flex-1 px-3 py-2.5">
                         <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">Records</div>
@@ -266,7 +266,7 @@ const PaymentReport: React.FC = () => {
             )}
 
             {/* Mobile flat list — visible only below sm breakpoint */}
-            <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+            <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
                 {loading ? (
                     <div className="text-center py-10 text-sm text-gray-400">Loading...</div>
                 ) : paginated.length === 0 ? (

@@ -289,7 +289,7 @@ export default function PendingReview() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full">
+    <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
       {/* Toolbar */}
       <div className="flex-none bg-slate-50 px-3 pt-2 pb-2 border-b border-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -353,7 +353,7 @@ export default function PendingReview() {
       </div>
 
       {/* Scrollable table area */}
-      <div className="flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3">
+      <div className="flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3" style={{ overscrollBehavior: 'contain' }}>
         <table className="border-collapse text-[14px] w-full">
           <thead>
             <tr>

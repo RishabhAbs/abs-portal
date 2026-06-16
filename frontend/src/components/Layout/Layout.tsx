@@ -348,7 +348,7 @@ const Layout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-16 md:pb-0">
+    <div className="h-screen flex flex-col bg-slate-100 overflow-hidden">
       {/* Session Lock Modal */}
       {isSessionLocked && (
         <SessionLockModal
@@ -703,8 +703,11 @@ const Layout: React.FC = () => {
         </div>
       )}
 
-      {/* Main Content — pt-14/16 offsets the fixed header so content doesn't hide behind it */}
-      <main className="w-full p-0 md:p-1 pt-14 md:pt-16 animate-in fade-in duration-500">
+      {/* Main Content — fills the space between the fixed header and the fixed mobile bottom nav.
+          pt-14/16 clears the header, pb-16 (mobile only) clears the bottom nav.
+          flex-1 + overflow-y-auto makes this the single scroll region for ordinary pages;
+          app-shell pages (their own flex/h-full layout) manage their own inner scroll area instead. */}
+      <main className="flex-1 min-h-0 w-full p-0 md:p-1 pt-14 md:pt-16 pb-16 md:pb-0 overflow-y-auto animate-in fade-in duration-500">
         <Outlet />
       </main>
 

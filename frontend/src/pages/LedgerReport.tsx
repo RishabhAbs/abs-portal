@@ -132,12 +132,29 @@ export default function LedgerReport() {
         search: debouncedSearch || undefined,
       });
       if (res.success) {
-        setRows(res.data.rows || []);
+        const newRows: Row[] = res.data.rows || [];
+        setRows(newRows);
         setOpening(res.data.opening || 0);
         setClosing(res.data.closing || 0);
         setTotals({ debit: res.data.totalDebit || 0, credit: res.data.totalCredit || 0 });
         if (res.data.ledger && res.data.ledger.company !== ledgerName) {
           setLedgerName(res.data.ledger.company);
+        }
+        // Snap "From"/"To" to the 1st/last day of the most recent entry's
+        // month, so the visible range tightens to where the ledger's
+        // activity actually is instead of sitting on the FY-start default.
+        // Take the max date across all rows rather than trusting array order.
+        let latest: Date | null = null;
+        for (const r of newRows) {
+          if (!r.vch_date) continue;
+          const d = new Date(r.vch_date);
+          if (!latest || d > latest) latest = d;
+        }
+        if (latest) {
+          const monthStart = toInputDate(new Date(latest.getFullYear(), latest.getMonth(), 1));
+          const monthEnd = toInputDate(new Date(latest.getFullYear(), latest.getMonth() + 1, 0));
+          if (monthStart !== dateFrom) setDateFrom(monthStart);
+          if (monthEnd !== dateTo) setDateTo(monthEnd);
         }
       }
     } catch {
@@ -276,7 +293,7 @@ export default function LedgerReport() {
   const headBtn = 'flex items-center select-none cursor-pointer hover:text-blue-700';
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] md:h-[calc(100vh-72px)] w-full ledger-report-root">
+    <div className="flex flex-col w-full ledger-report-root fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: 'contain' }}>
       {/* Print-only header — only renders to paper. Browsers ignore display
           for screen because the @media print rules in index.css show it. */}
       <div className="print-only mb-3" aria-hidden>
@@ -397,7 +414,7 @@ export default function LedgerReport() {
         <>
 
           {/* Mobile flat list — Tally-style, shown only on xs screens (hidden on sm+) */}
-          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+          <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: 'contain' }}>
             {loading ? (
               <div className="py-10 text-center text-gray-400 text-sm">Loading…</div>
             ) : sorted.length === 0 ? (
