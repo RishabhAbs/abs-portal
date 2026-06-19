@@ -188,66 +188,50 @@ export class DashboardService {
     }
     const sumGrade = (g: Record<Grade, number>) => g.silver + g.gold + g.auditor;
 
-    // Movement — last 30 days. Three lightweight queries because the
-    // criteria don't share a common JOIN shape.
-    const [onboardNew, onboardFromOther, leftRecently] = await Promise.all([
-      // Brand-new customers added in the window. We use customer.date
-      // (registration date) when set, otherwise active_status flips to
-      // Active inside the window. Falls back to NULL-tolerant grade so
-      // even if tallydetails hasn't been linked yet, the customer counts.
+    const gradeCase = `
+      CASE
+        WHEN UPPER(sm.name) = 'GOLD'    THEN 'gold'
+        WHEN UPPER(sm.name) = 'SILVER'  THEN 'silver'
+        WHEN UPPER(sm.name) = 'AUDITOR' THEN 'auditor'
+        ELSE 'auditor'
+      END AS grade`;
+    const smJoin = `LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR) AND sm.type = 'TallyFlavor'`;
+
+    const [onboardNew, onboardFromOther, leftRows] = await Promise.all([
+      // New: serials whose add_date is within 30 days.
       this.db.query<any>(`
-        SELECT
-          CASE
-            WHEN UPPER(sm.name) = 'GOLD'    THEN 'gold'
-            WHEN UPPER(sm.name) = 'SILVER'  THEN 'silver'
-            WHEN UPPER(sm.name) = 'AUDITOR' THEN 'auditor'
-            ELSE 'auditor'
-          END AS grade,
-          COUNT(DISTINCT c.id) AS cnt
-        FROM customer c
-        LEFT JOIN tallydetails td ON CAST(c.id AS CHAR) = td.customerid
-        LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR) AND sm.type = 'TallyFlavor'
-        WHERE c.date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-        GROUP BY grade
-      `).catch(() => [] as any[]),
-      // Customers whose latest tallydetails flipped to 'Our Tally' in the
-      // last 30 days (proxy for "onboarded from another vendor"). Uses
-      // tallydetails.updated_at since that's when the flip is recorded.
-      this.db.query<any>(`
-        SELECT
-          CASE
-            WHEN UPPER(sm.name) = 'GOLD'    THEN 'gold'
-            WHEN UPPER(sm.name) = 'SILVER'  THEN 'silver'
-            WHEN UPPER(sm.name) = 'AUDITOR' THEN 'auditor'
-            ELSE 'auditor'
-          END AS grade,
-          COUNT(DISTINCT td.customerid) AS cnt
+        SELECT ${gradeCase}, COUNT(DISTINCT td.id) AS cnt
         FROM tallydetails td
-        LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR) AND sm.type = 'TallyFlavor'
+        ${smJoin}
         WHERE td.tally_status = 'Our Tally'
-          AND td.updated_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+          AND (td.active_status = 'Active' OR td.active_status IS NULL)
+          AND td.add_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
         GROUP BY grade
       `).catch(() => [] as any[]),
-      // Customers marked Inactive in the last 30 days. The customer table
-      // doesn't carry a "deactivated_at" column so we approximate via the
-      // updated_at timestamp on tallydetails or fall back to 0.
+
+      // From Other: serials that became active (active_date) within 30 days
+      // and active_date is after add_date (genuine conversion, not a new add).
       this.db.query<any>(`
-        SELECT
-          CASE
-            WHEN UPPER(sm.name) = 'GOLD'    THEN 'gold'
-            WHEN UPPER(sm.name) = 'SILVER'  THEN 'silver'
-            WHEN UPPER(sm.name) = 'AUDITOR' THEN 'auditor'
-            ELSE 'auditor'
-          END AS grade,
-          COUNT(DISTINCT c.id) AS cnt
-        FROM customer c
-        LEFT JOIN tallydetails td ON CAST(c.id AS CHAR) = td.customerid
-        LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR) AND sm.type = 'TallyFlavor'
-        WHERE c.active_status = 'Inactive'
-          AND td.updated_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+        SELECT ${gradeCase}, COUNT(DISTINCT td.id) AS cnt
+        FROM tallydetails td
+        ${smJoin}
+        WHERE td.tally_status = 'Our Tally'
+          AND td.active_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+          AND (td.add_date IS NULL OR td.active_date > td.add_date)
+        GROUP BY grade
+      `).catch(() => [] as any[]),
+
+      // Left: serials where left_date was stamped within 30 days.
+      // Stamped by Tally API sync when serial_status=0 (no longer tagged to ABS).
+      this.db.query<any>(`
+        SELECT ${gradeCase}, COUNT(DISTINCT td.id) AS cnt
+        FROM tallydetails td
+        ${smJoin}
+        WHERE td.left_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
         GROUP BY grade
       `).catch(() => [] as any[]),
     ]);
+
     const tallyToGrade = (rows: any[]): Record<Grade, number> => {
       const out = blankGrade();
       for (const r of rows) {
@@ -273,9 +257,9 @@ export class DashboardService {
         },
       },
       movement: {
-        onboard_new:        { ...tallyToGrade(onboardNew),        total: sumGrade(tallyToGrade(onboardNew)) },
-        onboard_from_other: { ...tallyToGrade(onboardFromOther),  total: sumGrade(tallyToGrade(onboardFromOther)) },
-        left:               { ...tallyToGrade(leftRecently),      total: sumGrade(tallyToGrade(leftRecently)) },
+        onboard_new:        { ...tallyToGrade(onboardNew),       total: sumGrade(tallyToGrade(onboardNew)) },
+        onboard_from_other: { ...tallyToGrade(onboardFromOther), total: sumGrade(tallyToGrade(onboardFromOther)) },
+        left:               { ...tallyToGrade(leftRows),         total: sumGrade(tallyToGrade(leftRows)) },
       },
     };
   }

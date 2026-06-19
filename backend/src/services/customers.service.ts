@@ -108,6 +108,9 @@ export class CustomersService implements OnModuleInit {
         );
         await this.db.execute(`ALTER TABLE customer ADD INDEX idx_active_status (active_status)`).catch(() => {});
       }
+      if (!colNames.includes('deactivated_at')) {
+        await this.db.execute(`ALTER TABLE customer ADD COLUMN deactivated_at DATETIME DEFAULT NULL`);
+      }
 
       // Legacy table — opening bills now live in bill_allocation with
       // vchid=NULL. Kept here as IF NOT EXISTS so old DBs don't blow up
@@ -903,6 +906,12 @@ export class CustomersService implements OnModuleInit {
         fields.push(`\`${key}\` = ?`); // wrap key in quotes for reserved words like group
         values.push(val);
       }
+    }
+
+    if ((data as any).active_status === 'Inactive') {
+      fields.push('deactivated_at = NOW()');
+    } else if ((data as any).active_status === 'Active') {
+      fields.push('deactivated_at = NULL');
     }
 
     if (fields.length > 0) {

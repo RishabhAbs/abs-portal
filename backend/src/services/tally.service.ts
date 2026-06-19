@@ -37,6 +37,7 @@ export class TallyService implements OnModuleInit {
             if (!colNames.includes('last_call_at')) await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN last_call_at DATETIME`);
             if (!colNames.includes('created_at')) await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP`);
             if (!colNames.includes('updated_at')) await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`);
+            if (!colNames.includes('became_our_tally_at')) await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN became_our_tally_at DATETIME DEFAULT NULL`);
 
             // Tally API Sync Columns
             const syncCols = ['tally_api_checked_at', 'tally_api_flavor', 'tally_api_edition', 'tally_api_org', 'tally_api_email', 'tally_api_mobile', 'tally_api_activation'];
@@ -88,9 +89,9 @@ export class TallyService implements OnModuleInit {
             // Get up to 100 unchecked serials (using tally_api_checked_at IS NULL)
             // Or ones that haven't been checked in the last month. The user said "search only for once"
             const unchecked = await this.db.queryStandard(`
-                SELECT id, tallyserial 
-                FROM tallydetails 
-                WHERE tallyserial IS NOT NULL AND tallyserial != '' 
+                SELECT id, tallyserial, tally_status
+                FROM tallydetails
+                WHERE tallyserial IS NOT NULL AND tallyserial != ''
                   AND tally_api_checked_at IS NULL
                 LIMIT 50
             `);
@@ -123,17 +124,26 @@ export class TallyService implements OnModuleInit {
                         if (json.expiry_details?.serial_status === 0) {
                             // "This Serial Number is not tagged to you !"
                             this.logger.log(`Serial ${row.tallyserial} is not tagged to us. Setting customer status to 'Not Our Customer'.`);
-                            
+
                             // Update customer table via joining tallydetails
                             await this.db.execute(`
-                                UPDATE customer c 
-                                JOIN tallydetails td ON c.id = td.customerid 
-                                SET c.status = 'Not Our Customer' 
+                                UPDATE customer c
+                                JOIN tallydetails td ON c.id = td.customerid
+                                SET c.status = 'Not Our Customer'
                                 WHERE td.id = ?
                             `, [row.id]);
 
-                            // Mark as checked
-                            await this.db.execute(`UPDATE tallydetails SET tally_api_checked_at = NOW() WHERE id = ?`, [row.id]);
+                            // Stamp left_date = NOW() only if serial was previously 'Our Tally'
+                            // (fresh departure). Already-known departures keep their historical left_date.
+                            if (row.tally_status === 'Our Tally') {
+                                await this.db.execute(`
+                                    UPDATE tallydetails SET tally_api_checked_at = NOW(), left_date = NOW()
+                                    WHERE id = ?
+                                `, [row.id]);
+                                this.logger.log(`Serial ${row.tallyserial} departed — left_date stamped.`);
+                            } else {
+                                await this.db.execute(`UPDATE tallydetails SET tally_api_checked_at = NOW() WHERE id = ?`, [row.id]);
+                            }
                         } else if (json.expiry_details?.serial_status === 1 && typeof json.expiry_details.serial_data === 'object') {
                             const data = json.expiry_details.serial_data;
                             
@@ -645,39 +655,45 @@ export class TallyService implements OnModuleInit {
             throw new ForbiddenException('Our Tally serials cannot be updated manually. Use the Tally API sync.');
         }
 
+        const newStatus = data.tally_status || 'Our Tally';
         if (existing) {
+            const becomingOurTally = newStatus === 'Our Tally' && existing.tally_status !== 'Our Tally';
             await this.db.execute(`
                 UPDATE tallydetails
                 SET customerid = ?, tallyflavor = ?, tallyexpirydate = ?,
                     tally_status = ?, active_status = ?, reneval = ?, reason = ?, partner = ?,
+                    became_our_tally_at = CASE WHEN ? = 1 THEN NOW() ELSE became_our_tally_at END,
                     updated_at = NOW()
                 WHERE tallyserial = ?
             `, [
                 data.customer_id,
                 data.flavor || null,
                 data.expire_date || null,
-                data.tally_status || 'Our Tally',
+                newStatus,
                 data.active_status || 'Active',
                 data.renewal || 'New Release',
                 data.reason || '',
                 data.partner || '',
+                becomingOurTally ? 1 : 0,
                 data.serial
             ]);
         } else {
+            const isOurTally = newStatus === 'Our Tally';
             await this.db.execute(`
                 INSERT INTO tallydetails
-                (tallyserial, customerid, tallyflavor, tallyexpirydate, tally_status, active_status, reneval, reason, partner, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                (tallyserial, customerid, tallyflavor, tallyexpirydate, tally_status, active_status, reneval, reason, partner, became_our_tally_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             `, [
                 data.serial,
                 data.customer_id,
                 data.flavor || null,
                 data.expire_date || null,
-                data.tally_status || 'Our Tally',
+                newStatus,
                 data.active_status || 'Active',
                 data.renewal || 'New Release',
                 data.reason || '',
-                data.partner || ''
+                data.partner || '',
+                isOurTally ? new Date() : null,
             ]);
         }
         return { success: true };

@@ -348,25 +348,38 @@ export default function OutstandingReport() {
         ) : pageRows.map((b, i) => {
           const positive = b.closing_balance > 0;
           const rowIdx = startIdx + i;
-          const amountSide = positive ? 'Dr' : 'Cr';
-          const subInfo = [displayDate(b.bill_date), b.bill_name].filter(Boolean).join('  |  ');
+          const ageBadge =
+            b.age_days <= 15 ? 'bg-emerald-100 text-emerald-700' :
+            b.age_days <= 30 ? 'bg-amber-100  text-amber-700'   :
+            b.age_days <= 60 ? 'bg-orange-100 text-orange-700'  :
+                               'bg-red-100    text-red-700';
           return (
-            <div key={rowIdx} className="border-b border-slate-100 active:bg-slate-50">
-              <div className="flex items-start justify-between px-4 py-3">
-                <div className="flex-1 min-w-0 pr-3">
-                  <div className="font-semibold text-slate-900 text-[15px] leading-snug truncate">{b.party_name}</div>
-                  <div className="text-[12px] text-slate-400 mt-0.5">{subInfo}</div>
-                  {(b.reseller_name || b.age_days != null) && (
-                    <div className="text-[12px] text-slate-400 mt-0.5">
-                      {b.reseller_name ? `${b.reseller_name}  ·  ` : ''}Age: {b.age_days} days
-                    </div>
-                  )}
+            <div key={rowIdx} className="border-b border-slate-100 px-4 py-3 active:bg-slate-50">
+              {/* ── Party + Amount ── */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-slate-900 text-[15px] leading-snug truncate">{b.party_name}</div>
+                  <div className="text-[12px] text-slate-400 mt-0.5 truncate">
+                    {b.bill_name}{b.bill_date ? `  ·  ${displayDate(b.bill_date)}` : ''}
+                  </div>
                 </div>
                 <div className="shrink-0 text-right">
-                  <span className={`text-[15px] font-semibold tabular-nums ${positive ? 'text-emerald-700' : 'text-red-600'}`}>
-                    {fmt(Math.abs(b.closing_balance))} {amountSide}
-                  </span>
+                  <div className={`text-[16px] font-bold tabular-nums leading-tight ${positive ? 'text-emerald-700' : 'text-red-600'}`}>
+                    ₹{fmt(Math.abs(b.closing_balance))}
+                  </div>
+                  <div className={`text-[10px] font-bold tracking-wide ${positive ? 'text-emerald-500' : 'text-red-400'}`}>
+                    {positive ? 'RECEIVABLE' : 'PAYABLE'}
+                  </div>
                 </div>
+              </div>
+              {/* ── Age badge + reseller ── */}
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ageBadge}`}>
+                  {b.age_days}d
+                </span>
+                {b.reseller_name && (
+                  <span className="text-[12px] text-slate-400 truncate">{b.reseller_name}</span>
+                )}
               </div>
             </div>
           );

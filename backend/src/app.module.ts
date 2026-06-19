@@ -57,6 +57,8 @@ import { TdlBillingService } from './services/tdl-billing.service';
 import { ServerMonitorController } from './controllers/server-monitor.controller';
 import { ServerMonitorService } from './services/server-monitor.service';
 import { OnlineWebsiteController } from './controllers/online-website.controller';
+import { BackupController } from './controllers/backup.controller';
+import { BackupService } from './services/backup.service';
 
 // Guards
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -115,6 +117,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     TdlBillingController,
     ServerMonitorController,
     OnlineWebsiteController,
+    BackupController,
   ],
   providers: [
     UsersService,
@@ -149,6 +152,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     TdlExpiryService,
     TdlBillingService,
     ServerMonitorService,
+    BackupService,
   ],
 })
 export class AppModule { }

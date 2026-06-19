@@ -46,8 +46,8 @@ const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 async function run() {
   const now       = new Date();
   const stamp     = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sqlFile   = path.join(CONFIG.backupDir, `backup_${stamp}.sql`);
-  const zipFile   = path.join(CONFIG.backupDir, `backup_${stamp}.zip`);
+  const sqlFile   = path.join(CONFIG.backupDir, `abscloud_dbbackup_${stamp}.sql`);
+  const zipFile   = path.join(CONFIG.backupDir, `abscloud_dbbackup_${stamp}.zip`);
 
   // 1. Create backup directory
   fs.mkdirSync(CONFIG.backupDir, { recursive: true });
@@ -94,7 +94,8 @@ async function run() {
   await transporter.sendMail({
     from   : CONFIG.mail.from,
     to     : CONFIG.mail.to,
-    subject: `ABS Cloud DB Backup — ${dateStr}`,
+    subject: `[ABSCLOUD-DBBACKUP] Database Backup — ${dateStr}`,
+    headers: { 'X-ABSCloud-Backup': 'true' },
     html   : `
       <div style="font-family:sans-serif;max-width:480px">
         <h2 style="color:#1d4ed8">ABS Cloud — Database Backup</h2>
@@ -117,15 +118,15 @@ async function run() {
   });
   log('Email sent successfully.');
 
-  // 5. Cleanup SQL file (keep zip for 7 days)
+  // 5. Cleanup SQL file (keep zip for 15 days)
   fs.unlinkSync(sqlFile);
 
-  // 6. Delete zips older than 7 days
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  // 6. Delete zips older than 15 days
+  const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
   for (const f of fs.readdirSync(CONFIG.backupDir)) {
-    if (!f.endsWith('.zip')) continue;
+    if (!f.startsWith('abscloud_dbbackup_') || !f.endsWith('.zip')) continue;
     const fp = path.join(CONFIG.backupDir, f);
-    if (fs.statSync(fp).mtimeMs < sevenDaysAgo) {
+    if (fs.statSync(fp).mtimeMs < fifteenDaysAgo) {
       fs.unlinkSync(fp);
       log(`Deleted old backup: ${f}`);
     }

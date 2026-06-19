@@ -716,7 +716,11 @@ const Vouchers: React.FC = () => {
               amount: Math.abs(Number(b.amount)),
             })),
           };
-          return calcLine(base, editIgst);
+          // When qty=0 but amount>0 (amount-only batch entry), apply amount
+          // directly so it isn't lost by qty*rate=0 in calcLine.
+          return base.qty === 0 && base.amount > 0
+            ? calcLineFromAmount(base, editIgst, base.amount)
+            : calcLine(base, editIgst);
         }));
       }
 
@@ -1073,7 +1077,7 @@ const Vouchers: React.FC = () => {
     const existing = lines[idx].batch_rows;
     const draft = existing?.length
       ? existing.map(r => ({ ...r, serialSearch: r.batch_name, serialOpen: false }))
-      : [{ id: uid(), batch_name: '', qty: 1, rate: 0, amount: 0, serialSearch: '', serialOpen: false }];
+      : [{ id: uid(), batch_name: '', qty: 0, rate: 0, amount: 0, serialSearch: '', serialOpen: false }];
     setBatchDraft(draft);
     setBatchPopupIdx(idx);
     setBatchSerials([]);
@@ -1106,25 +1110,30 @@ const Vouchers: React.FC = () => {
     const targetLine = lines[batchPopupIdx];
     const prod = targetLine ? products.find((p: any) => String(p.id) === String(targetLine.product_id)) : null;
     if (prod?.batch === 'Yes') {
-      const rowsWithQty = batchDraft.filter(r => r.qty > 0);
-      if (rowsWithQty.length === 0) {
-        showError('Validation', `"${prod.item_name}" requires at least one batch row with a serial number and a quantity.`);
+      // Allow rows that have qty>0 OR amount>0 — qty is optional when amount is entered directly
+      const rowsWithValue = batchDraft.filter(r => r.qty > 0 || r.amount > 0);
+      if (rowsWithValue.length === 0) {
+        showError('Validation', `"${prod.item_name}" requires at least one batch row with a serial number and an amount.`);
         return;
       }
-      const blankIdx = rowsWithQty.findIndex(r => !(r.batch_name || '').trim());
+      const blankIdx = rowsWithValue.findIndex(r => !(r.batch_name || '').trim());
       if (blankIdx !== -1) {
         showError('Validation', `Serial / batch number is empty for row ${blankIdx + 1}. Enter the serial before saving.`);
         return;
       }
     }
-    const valid = batchDraft.filter(r => r.qty > 0);
+    // Accept rows with qty>0 OR amount>0 (serial-only with a direct amount is valid)
+    const valid = batchDraft.filter(r => r.qty > 0 || r.amount > 0);
     const totalQty    = +valid.reduce((s, r) => s + r.qty, 0).toFixed(3);
     const totalAmount = +valid.reduce((s, r) => s + r.amount, 0).toFixed(2);
     const avgRate     = totalQty > 0 ? +(totalAmount / totalQty).toFixed(4) : 0;
     setLines(prev => {
       const updated = [...prev];
       const base = { ...updated[batchPopupIdx], qty: totalQty, rate: avgRate };
-      const line = { ...calcLine(base, isIgst), batch_rows: valid };
+      // When qty=0 but amount>0, apply amount directly so it isn't computed as qty*rate=0
+      const line = totalQty === 0 && totalAmount > 0
+        ? { ...calcLineFromAmount(base, isIgst, totalAmount), batch_rows: valid }
+        : { ...calcLine(base, isIgst), batch_rows: valid };
       updated[batchPopupIdx] = line;
       return updated;
     });
@@ -1494,6 +1503,13 @@ const Vouchers: React.FC = () => {
       .filter(l => (l.company || '').toLowerCase().includes(search.toLowerCase()))
       .slice(0, 20);
 
+  // CGST/SGST/IGST are auto-posted from item tax rates on Sales/Purchase/
+  // Tax Invoice vouchers — they don't apply to Journal/Payment/Receipt/
+  // Contra, so hide them from the ledger search on those voucher types.
+  const TAX_LEDGER_NAMES = ['cgst', 'sgst', 'igst'];
+  const filterJournalLedgers = (list: any[]) =>
+    list.filter(l => !TAX_LEDGER_NAMES.includes((l.company || '').trim().toLowerCase()));
+
   const mobileParentColor = (name: string) => {
     const n = name.toLowerCase();
     if (n.includes('sales'))    return 'border-emerald-300 bg-emerald-50 text-emerald-700';
@@ -1652,7 +1668,8 @@ const Vouchers: React.FC = () => {
                         setJournalRows(p => p.map(r => r.id === row.id ? { ...r, search: q, ledger_id: null, ledger_name: '', open: q.length >= 2 } : r));
                         if (q.length >= 2) {
                           customersApi.searchAllLedgers(q).then((res: any) => {
-                            setJournalRows(p => p.map(r => r.id === row.id ? { ...r, results: res?.data || [], open: true } : r));
+                            const list = filterJournalLedgers(res?.data || []);
+                            setJournalRows(p => p.map(r => r.id === row.id ? { ...r, results: list, open: true } : r));
                           }).catch(() => {});
                         }
                       }}
@@ -2294,7 +2311,7 @@ const Vouchers: React.FC = () => {
                             setActiveDropIdx(0); // pre-select first match for instant Enter
                             if (q.length >= 2) {
                               customersApi.searchAllLedgers(q).then((res: any) => {
-                                const list: any[] = res?.data || [];
+                                const list: any[] = filterJournalLedgers(res?.data || []);
                                 setJournalRows(p => p.map(r => r.id === row.id ? { ...r, results: list, open: true } : r));
                               }).catch((err: any) => console.warn('[LedgerSearch]', err?.message || err));
                             }
@@ -3025,7 +3042,7 @@ const Vouchers: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-              <button onClick={() => setBatchDraft(d => [...d, { id: uid(), batch_name: '', qty: 1, rate: 0, amount: 0, serialSearch: '', serialOpen: false }])}
+              <button onClick={() => setBatchDraft(d => [...d, { id: uid(), batch_name: '', qty: 0, rate: 0, amount: 0, serialSearch: '', serialOpen: false }])}
                 onKeyDown={handleKeyDown} className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 mt-2">
                 <Plus size={12} /> Add Serial No.
               </button>
@@ -3096,7 +3113,7 @@ const Vouchers: React.FC = () => {
                   </div>
                 </div>
               ))}
-              <button onClick={() => setBatchDraft(d => [...d, { id: uid(), batch_name: '', qty: 1, rate: 0, amount: 0, serialSearch: '', serialOpen: false }])}
+              <button onClick={() => setBatchDraft(d => [...d, { id: uid(), batch_name: '', qty: 0, rate: 0, amount: 0, serialSearch: '', serialOpen: false }])}
                 onKeyDown={handleKeyDown} className="flex items-center gap-1.5 text-sm text-green-600 hover:text-green-800 py-1">
                 <Plus size={15} /> Add Serial No.
               </button>

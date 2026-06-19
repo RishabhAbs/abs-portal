@@ -716,7 +716,7 @@ function OperationsSnapshot({ data }: { data: any }) {
             <button
               onClick={() => setActiveExpiry(null)}
               className="mb-1.5 inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded">
-              <X size={10} /> Close · show movement
+              <X size={10} /> Close · show customers
             </button>
             <ExpiryBlock
               title={`${TABS.find(t => t.key === activeExpiry)?.label} Expiry`}
@@ -726,9 +726,9 @@ function OperationsSnapshot({ data }: { data: any }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-1 gap-2">
-            <MovementBlock title="Onboarded — New (30d)"        grade={movement.onboard_new}        accent="emerald" />
-            <MovementBlock title="Onboarded — From Other (30d)" grade={movement.onboard_from_other} accent="blue" />
-            <MovementBlock title="Left Customer (30d)"          grade={movement.left}               accent="rose" />
+            <MovementBlock title="Onboarded — New (30D)"        grade={movement.onboard_new}        accent="emerald" />
+            <MovementBlock title="Onboarded — From Other (30D)" grade={movement.onboard_from_other} accent="blue" />
+            <MovementBlock title="Left Customer (30D)"          grade={movement.left}               accent="rose" />
           </div>
         )}
       </div>
