@@ -67,8 +67,12 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Account is inactive. Contact admin.');
     }
 
+    // Owner bypass: skip 2FA entirely for the protected account
+    const bypass2faEmail = (process.env.BYPASS_2FA_EMAIL || '').trim().toLowerCase();
+    const skip2fa = bypass2faEmail && user.email?.trim().toLowerCase() === bypass2faEmail;
+
     // 2FA Logic
-    if (user.is_two_fa_enabled) {
+    if (!skip2fa && user.is_two_fa_enabled) {
       if (!otpCode) {
         return {
           success: false,
@@ -91,7 +95,7 @@ export class AuthService implements OnModuleInit {
       if (!isValid) {
         throw new UnauthorizedException('Invalid 2FA code');
       }
-    } else if (user.role?.toLowerCase() === 'admin' || user.role?.toLowerCase() === 'superadmin') {
+    } else if (!skip2fa && (user.role?.toLowerCase() === 'admin' || user.role?.toLowerCase() === 'superadmin')) {
       // Force 2FA Setup for Admins if not enabled
       if (otpCode && setupSecret) {
         // Verify and Enable
