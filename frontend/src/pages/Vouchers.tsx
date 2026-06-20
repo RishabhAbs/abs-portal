@@ -219,6 +219,8 @@ const Vouchers: React.FC = () => {
   const [batchDraft, setBatchDraft]       = useState<BatchRow[]>([]);
   const [batchSerials, setBatchSerials]   = useState<string[]>([]);
   const [batchNoFlavour, setBatchNoFlavour] = useState(false);
+  const [batchSerialHiIdx, setBatchSerialHiIdx] = useState(-1);
+  const batchScrollRef = useRef<HTMLDivElement>(null);
 
   // Bill allocation
   const [customerBillByBill, setCustomerBillByBill] = useState(false);
@@ -762,9 +764,12 @@ const Vouchers: React.FC = () => {
         // effect that re-derives them from items uses the same `auto-cgst`
         // ids — replacing this row instead of duplicating it.
         if (otherEntries.length) {
-          const taxLedgerIdSet = new Set([
-            taxLedgerIds.cgst, taxLedgerIds.sgst, taxLedgerIds.igst,
-          ].filter(Boolean));
+          // Derive tax ledger IDs fresh from allLedgers to avoid stale-closure
+          // race with taxLedgerIds state (both are set in the same async effect).
+          const findId = (name: string) => allLedgers.find((l: any) => (l.company || '').toUpperCase() === name)?.id ?? null;
+          const cgstId = findId('CGST'); const sgstId = findId('SGST'); const igstId = findId('IGST');
+          const taxLedgerIdSet = new Set([cgstId, sgstId, igstId].filter(Boolean));
+
           const mapped = otherEntries.map((le: any) => {
             // If the backend JOIN missed the name, fall back to allLedgers already in state
             const resolvedName = le.ledger_name ||
@@ -777,9 +782,9 @@ const Vouchers: React.FC = () => {
             // Also detect tax rows by ledger_id when name resolution failed
             const isTaxById = le.ledger_id && taxLedgerIdSet.has(le.ledger_id);
             const presetId =
-              isCgst || (isTaxById && le.ledger_id === taxLedgerIds.cgst) ? 'auto-cgst' :
-              isSgst || (isTaxById && le.ledger_id === taxLedgerIds.sgst) ? 'auto-sgst' :
-              isIgst || (isTaxById && le.ledger_id === taxLedgerIds.igst) ? 'auto-igst' :
+              isCgst || le.ledger_id === cgstId ? 'auto-cgst' :
+              isSgst || le.ledger_id === sgstId ? 'auto-sgst' :
+              isIgst || le.ledger_id === igstId ? 'auto-igst' :
               isRound ? 'auto-roundoff' :
               uid();
             return {
@@ -2980,7 +2985,7 @@ const Vouchers: React.FC = () => {
 
             {/* Desktop: original table layout */}
             <div className="hidden sm:flex flex-col flex-1 overflow-hidden px-4 pt-4 pb-2">
-              <div className="overflow-y-auto flex-1">
+              <div className="overflow-y-auto flex-1" ref={batchScrollRef}>
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-white">
                   <tr className="text-[11px] text-gray-500 uppercase bg-gray-50">
@@ -3005,11 +3010,37 @@ const Vouchers: React.FC = () => {
                             className="w-full border border-gray-200 rounded text-sm py-1 px-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         ) : (
                           <div className="relative">
-                            <input type="text" onKeyDown={handleKeyDown} data-row={i} data-field="batch_search"
+                            <input type="text" data-row={i} data-field="batch_search"
                               value={row.serialSearch ?? row.batch_name}
-                              onChange={e => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialSearch: e.target.value, batch_name: e.target.value, serialOpen: true } : r))}
-                              onFocus={e => { setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: true } : r)); setTimeout(() => e.target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50); }}
-                              onBlur={() => setTimeout(() => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: false } : r)), 150)}
+                              onChange={e => { setBatchSerialHiIdx(-1); setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialSearch: e.target.value, batch_name: e.target.value, serialOpen: true } : r)); }}
+                              onFocus={e => {
+                                setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: true } : r));
+                                setBatchSerialHiIdx(-1);
+                                setTimeout(() => {
+                                  const scroller = batchScrollRef.current;
+                                  const el = e.target;
+                                  if (scroller && el) {
+                                    const scrollerRect = scroller.getBoundingClientRect();
+                                    const elRect = el.getBoundingClientRect();
+                                    if (elRect.bottom > scrollerRect.bottom - 160) {
+                                      scroller.scrollTop += elRect.bottom - scrollerRect.bottom + 160;
+                                    }
+                                  }
+                                }, 30);
+                              }}
+                              onBlur={() => setTimeout(() => { setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: false } : r)); setBatchSerialHiIdx(-1); }, 150)}
+                              onKeyDown={e => {
+                                const usedByOthers = new Set(batchDraft.filter(r => r.id !== row.id && r.batch_name).map(r => r.batch_name));
+                                const visible = batchSerials.filter(s => !usedByOthers.has(s) && (!row.serialSearch || s.toLowerCase().includes((row.serialSearch || '').toLowerCase())));
+                                if (e.key === 'ArrowDown') { e.preventDefault(); setBatchSerialHiIdx(h => Math.min(h + 1, visible.length - 1)); }
+                                else if (e.key === 'ArrowUp') { e.preventDefault(); setBatchSerialHiIdx(h => Math.max(h - 1, -1)); }
+                                else if (e.key === 'Enter' && batchSerialHiIdx >= 0 && visible[batchSerialHiIdx]) {
+                                  e.preventDefault();
+                                  const s = visible[batchSerialHiIdx];
+                                  setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, batch_name: s, serialSearch: s, serialOpen: false } : r));
+                                  setBatchSerialHiIdx(-1);
+                                } else { handleKeyDown(e as any); }
+                              }}
                               placeholder="Search serial no."
                               className="w-full border border-gray-200 rounded text-sm py-1 px-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                             {row.serialOpen && (
@@ -3017,9 +3048,9 @@ const Vouchers: React.FC = () => {
                                 {(() => {
                                   const usedByOthers = new Set(batchDraft.filter(r => r.id !== row.id && r.batch_name).map(r => r.batch_name));
                                   const visible = batchSerials.filter(s => !usedByOthers.has(s) && (!row.serialSearch || s.toLowerCase().includes((row.serialSearch || '').toLowerCase())));
-                                  return visible.length > 0 ? visible.map(s => (
-                                    <div key={s} onPointerDown={() => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, batch_name: s, serialSearch: s, serialOpen: false } : r))}
-                                      className="px-2 py-1.5 text-sm hover:bg-blue-50 cursor-pointer">{s}</div>
+                                  return visible.length > 0 ? visible.map((s, si) => (
+                                    <div key={s} onPointerDown={() => { setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, batch_name: s, serialSearch: s, serialOpen: false } : r)); setBatchSerialHiIdx(-1); }}
+                                      className={`px-2 py-1.5 text-sm cursor-pointer ${si === batchSerialHiIdx ? 'bg-blue-600 text-white' : 'hover:bg-blue-50'}`}>{s}</div>
                                   )) : (
                                     <div className="px-2 py-2 text-xs text-gray-400">
                                       {batchNoFlavour ? 'Set flavour for this item in Items page' : batchSerials.length === 0 ? 'No serials found' : 'No match'}
