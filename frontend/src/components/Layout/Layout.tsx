@@ -181,7 +181,6 @@ const Layout: React.FC = () => {
       icon: <Receipt className="h-5 w-5" />,
       children: [
         { label: 'New / Edit Voucher', path: '/billing/vouchers', entity: 'vouchers' as EntityType, icon: <Receipt className="h-4 w-4" /> },
-        { label: 'Print Voucher',      path: '/billing/print-voucher', entity: ['vouchers', 'reports_daybook'] as EntityType[], icon: <FileText className="h-4 w-4" /> },
       ],
     },
     {

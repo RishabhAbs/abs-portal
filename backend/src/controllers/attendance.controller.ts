@@ -33,7 +33,8 @@ export class AttendanceController {
   @Get('report')
   @ApiOperation({ summary: 'Get daily attendance report (Admin)' })
   async getDailyReport(@Request() req: any, @Query('date') date: string) {
-    if (req.user?.role?.toLowerCase() !== 'admin') throw new ForbiddenException('Admin access required');
+    const role = req.user?.role?.toLowerCase();
+    if (role !== 'admin' && role !== 'superadmin') throw new ForbiddenException('Admin access required');
     return this.attendanceService.getDailyReport(date);
   }
 

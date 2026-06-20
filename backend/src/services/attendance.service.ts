@@ -402,25 +402,25 @@ export class AttendanceService implements OnModuleInit {
         a.status as db_status,
         (SELECT COUNT(*) FROM user_checkin_checkout_details_new s
          WHERE s.user_id = u.id AND s.checkin_time IS NOT NULL
-         AND YEAR(s.date) = ? AND MONTH(s.date) = ?) as total_present,
+         AND YEAR(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ? AND MONTH(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ?) as total_present,
         (SELECT COUNT(*) FROM user_checkin_checkout_details_new s
          WHERE s.user_id = u.id AND s.checkin_time IS NOT NULL
          AND ${HD_COND}
-         AND YEAR(s.date) = ? AND MONTH(s.date) = ?) as total_half_day,
+         AND YEAR(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ? AND MONTH(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ?) as total_half_day,
         (SELECT COUNT(*) FROM user_checkin_checkout_details_new s
          WHERE s.user_id = u.id AND s.checkin_time IS NOT NULL
          AND NOT ${HD_COND} AND ${EARLY_COND}
-         AND YEAR(s.date) = ? AND MONTH(s.date) = ?) as total_early,
+         AND YEAR(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ? AND MONTH(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ?) as total_early,
         (SELECT COUNT(*) FROM user_checkin_checkout_details_new s
          WHERE s.user_id = u.id AND s.checkin_time IS NOT NULL
          AND NOT ${HD_COND} AND NOT ${EARLY_COND} AND ${LATE_COND}
-         AND YEAR(s.date) = ? AND MONTH(s.date) = ?) as total_late,
+         AND YEAR(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ? AND MONTH(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ?) as total_late,
         (SELECT COUNT(*) FROM user_checkin_checkout_details_new s
          WHERE s.user_id = u.id AND s.checkin_time IS NOT NULL
          AND NOT ${HD_COND} AND NOT ${EARLY_COND} AND NOT ${LATE_COND}
-         AND YEAR(s.date) = ? AND MONTH(s.date) = ?) as total_on_time
+         AND YEAR(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ? AND MONTH(DATE_ADD(s.date, INTERVAL 330 MINUTE)) = ?) as total_on_time
       FROM cloud_users u
-      LEFT JOIN user_checkin_checkout_details_new a ON u.id = a.user_id AND a.date = ?
+      LEFT JOIN user_checkin_checkout_details_new a ON u.id = a.user_id AND DATE(DATE_ADD(a.date, INTERVAL 330 MINUTE)) = ?
       WHERE u.status = 'active'
       ORDER BY u.name ASC
     `, [year, month, year, month, year, month, year, month, year, month, date]);

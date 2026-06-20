@@ -38,7 +38,7 @@ function fmtTargetValue(val: number, unit: string): string {
 
 const Dashboard: React.FC = () => {
   const { user, isAdmin, canView, canCheckPermission, logout } = useAuth();
-  const admin = isAdmin();
+  const admin = isAdmin() || user?.role?.toLowerCase() === 'superadmin';
   const canViewAllService = admin || canCheckPermission('service_calls', 'view_all');
   const canViewAllLeads = admin || canCheckPermission('leads', 'view_all');
 
@@ -76,6 +76,12 @@ const Dashboard: React.FC = () => {
   const [targetUserFilter, setTargetUserFilter] = useState<string>('');
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [filteredUserPerf, setFilteredUserPerf] = useState<any>(null);
+
+  // Collapsible sections (all collapsed by default on mobile)
+  const [secCompany,    setSecCompany]    = useState(false);
+  const [secPending,    setSecPending]    = useState(false);
+  const [secOps,        setSecOps]        = useState(false);
+  const [secTeam,       setSecTeam]       = useState(false);
 
   // Pending by user (admin only)
   const [pendingUsers, setPendingUsers] = useState<any[]>([]);
@@ -336,10 +342,11 @@ const Dashboard: React.FC = () => {
       {/* Targets — same layout for everyone. For admin, numbers are the sum across
           all users; for regular users, they're personal actuals vs personal plans. */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="px-3 py-2 border-b border-gray-200 bg-violet-50/50 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+        <div className="px-3 py-2 border-b border-gray-200 bg-violet-50/50 flex items-center justify-between gap-2 flex-wrap cursor-pointer select-none"
+          onClick={() => setSecCompany(v => !v)}>
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0" onClick={e => e.stopPropagation()}>
             <Target className="h-3.5 w-3.5 text-violet-600" />
-            <h3 className="font-semibold text-gray-900 text-sm truncate">
+            <h3 className="font-semibold text-gray-900 text-sm truncate cursor-pointer" onClick={() => setSecCompany(v => !v)}>
               {admin ? (targetUserFilter ? `Targets — ${targetUserFilter}` : 'Company Targets') : 'My Targets'}
             </h3>
             <span className="text-[10px] font-medium text-gray-500">FY {fy}</span>
@@ -347,6 +354,7 @@ const Dashboard: React.FC = () => {
               <select
                 value={targetUserFilter}
                 onChange={e => setTargetUserFilter(e.target.value)}
+                onClick={e => e.stopPropagation()}
                 className="ml-1 px-1.5 py-0.5 text-[11px] border border-violet-200 rounded bg-white focus:ring-2 focus:ring-violet-200 outline-none"
                 title="Filter targets by user"
               >
@@ -357,17 +365,14 @@ const Dashboard: React.FC = () => {
               </select>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
             <span className="text-[10px] text-gray-500">Today</span>
             <span className="text-xs font-bold text-gray-900">₹{(perfForUI?.activation_today || 0).toLocaleString('en-IN')}</span>
             <Link to="/targets" className="text-[10px] font-medium text-violet-700 hover:underline">Manage</Link>
+            <ChevronRight className={`h-4 w-4 text-gray-400 transition-transform ${secCompany ? 'rotate-90' : ''}`} />
           </div>
         </div>
-        {/* Compressed layout: smaller padding, tighter cell internals,
-            and a 1-line value/plan/% so 7 categories fit in roughly the
-            same vertical space as ~3 used to, keeping the dashboard
-            above the fold even on a 1080p screen. */}
-        <div className="p-2.5 space-y-2">
+        {secCompany && <div className="p-2.5 space-y-2">
           {TARGET_CATEGORIES.map(cat => {
             const unit = unitsForUI[cat.key] || 'qty';
             const todayVal = getToday(cat.key);
@@ -412,20 +417,21 @@ const Dashboard: React.FC = () => {
               </div>
             );
           })}
-        </div>
+        </div>}
       </div>
 
       {/* Pending Work Table — inline */}
-      {(
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-200 bg-amber-50/50 flex items-center gap-1.5">
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-200 bg-amber-50/50 flex items-center gap-1.5 cursor-pointer select-none"
+            onClick={() => setSecPending(v => !v)}>
             <Clock className="h-3.5 w-3.5 text-amber-600" />
             <h3 className="font-semibold text-gray-900 text-sm">{admin ? 'Pending Work' : 'My Pending Work'}</h3>
             {admin && pendingUsers.length > 0 && (
-              <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">{pendingUsers.length} users</span>
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">{pendingUsers.length} users</span>
             )}
+            <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secPending ? 'rotate-90' : ''}`} />
           </div>
-          <div className="overflow-x-auto">
+          {secPending && <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr className="text-[10px] text-gray-500 uppercase">
@@ -467,9 +473,8 @@ const Dashboard: React.FC = () => {
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
+          </div>}
+      </div>
 
       {/* Pending Detail Popup */}
       {pendingPopup && (
@@ -532,14 +537,25 @@ const Dashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Operations Snapshot — admin-only dense KPI grid. Mirrors the PHP
-          dashboard: 3 expiry buckets × Our/Other × Silver/Gold/Auditor +
-          3 customer-movement cards. */}
+      {/* Operations Snapshot — admin-only dense KPI grid. */}
       {admin && opsSnapshot && (
-        <OperationsSnapshot data={opsSnapshot} />
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center gap-1.5 cursor-pointer select-none"
+            onClick={() => setSecOps(v => !v)}>
+            <Activity className="h-3.5 w-3.5 text-slate-600" />
+            <h3 className="font-semibold text-gray-900 text-sm">Operations Snapshot</h3>
+            <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secOps ? 'rotate-90' : ''}`} />
+          </div>
+          {secOps && <OperationsSnapshot data={opsSnapshot} headerless />}
+        </div>
       )}
 
       </div>{/* /three-col grid */}
+
+      {/* Team Attendance — today's check-in/out for all users (admin only) */}
+      {admin && (
+        <TeamAttendance expanded={secTeam} onToggle={() => setSecTeam(v => !v)} />
+      )}
 
       {/* Floating Check-Out FAB — visible whenever the user is currently
           checked in. Tapping it opens a confirmation dialog so an accidental
@@ -634,6 +650,100 @@ const Dashboard: React.FC = () => {
 
 export default Dashboard;
 
+// ─── Team Attendance ──────────────────────────────────────────────────
+function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  const todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+  const [date, setDate] = useState(todayStr);
+  const [rows, setRows] = useState<any[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!expanded) return;
+    setLoaded(false);
+    attendanceApi.getDailyReport(date)
+      .then((res: any) => { setRows(Array.isArray(res) ? res : res?.records || res?.data || []); setLoaded(true); })
+      .catch(() => { setRows([]); setLoaded(true); });
+  }, [expanded, date]);
+
+  const checkedIn  = rows.filter(r => r.checkin_time && !r.checkout_time).length;
+  const checkedOut = rows.filter(r => r.checkout_time).length;
+  const absent     = rows.filter(r => !r.checkin_time).length;
+  const isToday    = date === todayStr;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-200 bg-green-50/50 flex items-center gap-1.5 cursor-pointer select-none"
+        onClick={onToggle}>
+        <Users className="h-3.5 w-3.5 text-green-600" />
+        <h3 className="font-semibold text-gray-900 text-sm">Team Attendance</h3>
+        {loaded && rows.length > 0 && (
+          <div className="flex items-center gap-1.5 ml-1">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">{checkedIn} In</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">{checkedOut} Out</span>
+            {absent > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">{absent} Absent</span>}
+          </div>
+        )}
+        <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      </div>
+      {expanded && (
+        <div>
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50">
+            <label className="text-xs text-gray-500 font-medium">Date:</label>
+            <input
+              type="date"
+              value={date}
+              max={todayStr}
+              onChange={e => setDate(e.target.value)}
+              onClick={e => e.stopPropagation()}
+              className="text-xs border border-gray-200 rounded px-2 py-0.5 text-gray-700 focus:outline-none focus:border-green-400"
+            />
+            {!isToday && (
+              <button onClick={e => { e.stopPropagation(); setDate(todayStr); }}
+                className="text-[10px] text-green-600 underline">Today</button>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+          {!loaded ? (
+            <div className="text-center py-6 text-gray-400 text-sm">Loading...</div>
+          ) : rows.length === 0 ? (
+            <div className="text-center py-6 text-gray-400 text-sm">No attendance data for {isToday ? 'today' : date}</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr className="text-[10px] text-gray-500 uppercase">
+                  <th className="px-3 py-1.5 text-left">User</th>
+                  <th className="px-3 py-1.5 text-center">Check In</th>
+                  <th className="px-3 py-1.5 text-center">Check Out</th>
+                  <th className="px-3 py-1.5 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((r: any, i: number) => {
+                  const status = r.checkout_time ? 'Out' : r.checkin_time ? 'In' : 'Absent';
+                  const statusCls = status === 'In' ? 'bg-green-100 text-green-700'
+                    : status === 'Out' ? 'bg-gray-100 text-gray-600'
+                    : 'bg-red-100 text-red-600';
+                  return (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-3 py-1.5 font-medium text-gray-800 truncate max-w-[140px]">{r.user_name || r.name || '—'}</td>
+                      <td className="px-3 py-1.5 text-center text-gray-600">{r.checkin_time ? String(r.checkin_time).slice(0,5) : '—'}</td>
+                      <td className="px-3 py-1.5 text-center text-gray-600">{r.checkout_time ? String(r.checkout_time).slice(0,5) : '—'}</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusCls}`}>{status}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Operations Snapshot ─────────────────────────────────────────────
 // Dense KPI grid matching the legacy PHP dashboard the team is used to.
 // Layout strategy:
@@ -644,7 +754,7 @@ export default Dashboard;
 // Numbers are intentionally large so the page reads as a status board
 // rather than a data table. Each tile is clickable in the future for
 // drill-down (the existing /tally/expiry pages already accept filters).
-function OperationsSnapshot({ data }: { data: any }) {
+function OperationsSnapshot({ data, headerless }: { data: any; headerless?: boolean }) {
   type Grade = { silver: number; gold: number; auditor: number; total: number };
   type Segment = { our: Grade; other: Grade };
   type ExpiryKey = 'old' | 'this_month' | 'future';
@@ -673,14 +783,16 @@ function OperationsSnapshot({ data }: { data: any }) {
   const tabActive = (k: ExpiryKey) => activeExpiry === k;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <Activity className="h-3.5 w-3.5 text-slate-600" />
-          <h3 className="font-semibold text-gray-900 text-sm">Operations Snapshot</h3>
+    <div className={headerless ? '' : 'bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden'}>
+      {!headerless && (
+        <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <Activity className="h-3.5 w-3.5 text-slate-600" />
+            <h3 className="font-semibold text-gray-900 text-sm">Operations Snapshot</h3>
+          </div>
+          <span className="text-[10px] text-gray-500 uppercase tracking-wide">Expiry × segment × grade</span>
         </div>
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide">Expiry × segment × grade</span>
-      </div>
+      )}
 
       <div className="p-2.5 space-y-2">
         {/* Expiry tabs — click to drill into one bucket. The selected

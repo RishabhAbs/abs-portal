@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Calendar, ChevronDown, ChevronUp, ChevronsUpDown, ChevronLeft, ChevronRight, RefreshCw, RotateCcw, Search, X, Printer } from 'lucide-react';
 import { customersApi, vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
@@ -49,6 +49,7 @@ const STORAGE_KEY = 'ledger-report-filters';
 
 export default function LedgerReport() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { showError } = useToast();
   const { canEdit } = useAuth();
   // Voucher edit allowed via any of: vouchers.edit (granular), the
@@ -71,11 +72,15 @@ export default function LedgerReport() {
     return null;
   })();
 
+  const urlLedgerId = searchParams.get('ledger_id');
+  const snapDoneRef = useRef<number | null>(null);
+
   const [showControls, setShowControls] = useState(false);
-  const [ledgerId, setLedgerId] = useState<number | null>(null);
+  const [ledgerId, setLedgerId] = useState<number | null>(urlLedgerId ? Number(urlLedgerId) : null);
   const [ledgerName, setLedgerName] = useState<string>('');
-  const [dateFrom, setDateFrom] = useState<string>(initial?.dateFrom ?? toInputDate(fyFrom));
-  const [dateTo, setDateTo]     = useState<string>(initial?.dateTo ?? toInputDate(today));
+  // When navigating from Group Summary via URL param, ignore saved dates and use full FY
+  const [dateFrom, setDateFrom] = useState<string>(urlLedgerId ? toInputDate(fyFrom) : (initial?.dateFrom ?? toInputDate(fyFrom)));
+  const [dateTo, setDateTo]     = useState<string>(urlLedgerId ? toInputDate(today) : (initial?.dateTo ?? toInputDate(today)));
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
@@ -84,7 +89,6 @@ export default function LedgerReport() {
   const [pickerResults, setPickerResults] = useState<any[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
 
-  const snapDoneRef = React.useRef<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const [opening, setOpening] = useState(0);
