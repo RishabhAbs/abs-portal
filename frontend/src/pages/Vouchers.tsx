@@ -3004,7 +3004,7 @@ const Vouchers: React.FC = () => {
                               placeholder="Search serial no."
                               className="w-full border border-gray-200 rounded text-sm py-1 px-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                             {row.serialOpen && (
-                              <div className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg mt-0.5 max-h-40 overflow-y-auto">
+                              <div className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg bottom-full mb-0.5 max-h-40 overflow-y-auto">
                                 {(() => {
                                   const usedByOthers = new Set(batchDraft.filter(r => r.id !== row.id && r.batch_name).map(r => r.batch_name));
                                   const visible = batchSerials.filter(s => !usedByOthers.has(s) && (!row.serialSearch || s.toLowerCase().includes((row.serialSearch || '').toLowerCase())));
