@@ -3008,12 +3008,12 @@ const Vouchers: React.FC = () => {
                             <input type="text" onKeyDown={handleKeyDown} data-row={i} data-field="batch_search"
                               value={row.serialSearch ?? row.batch_name}
                               onChange={e => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialSearch: e.target.value, batch_name: e.target.value, serialOpen: true } : r))}
-                              onFocus={() => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: true } : r))}
+                              onFocus={e => { setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: true } : r)); setTimeout(() => e.target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50); }}
                               onBlur={() => setTimeout(() => setBatchDraft(d => d.map(r => r.id === row.id ? { ...r, serialOpen: false } : r)), 150)}
                               placeholder="Search serial no."
                               className="w-full border border-gray-200 rounded text-sm py-1 px-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                             {row.serialOpen && (
-                              <div className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg bottom-full mb-0.5 max-h-40 overflow-y-auto">
+                              <div className="absolute z-30 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg mt-0.5 max-h-40 overflow-y-auto">
                                 {(() => {
                                   const usedByOthers = new Set(batchDraft.filter(r => r.id !== row.id && r.batch_name).map(r => r.batch_name));
                                   const visible = batchSerials.filter(s => !usedByOthers.has(s) && (!row.serialSearch || s.toLowerCase().includes((row.serialSearch || '').toLowerCase())));
