@@ -762,7 +762,10 @@ const Vouchers: React.FC = () => {
         // effect that re-derives them from items uses the same `auto-cgst`
         // ids — replacing this row instead of duplicating it.
         if (otherEntries.length) {
-          setLedgerRows(otherEntries.map((le: any) => {
+          const taxLedgerIdSet = new Set([
+            taxLedgerIds.cgst, taxLedgerIds.sgst, taxLedgerIds.igst,
+          ].filter(Boolean));
+          const mapped = otherEntries.map((le: any) => {
             // If the backend JOIN missed the name, fall back to allLedgers already in state
             const resolvedName = le.ledger_name ||
               (le.ledger_id ? (allLedgers.find((l: any) => l.id === le.ledger_id)?.company || '') : '');
@@ -771,10 +774,12 @@ const Vouchers: React.FC = () => {
             const isSgst = /^sgst$/.test(name) || name.includes('sgst');
             const isIgst = /^igst$/.test(name) || name.includes('igst');
             const isRound = name.includes('round');
+            // Also detect tax rows by ledger_id when name resolution failed
+            const isTaxById = le.ledger_id && taxLedgerIdSet.has(le.ledger_id);
             const presetId =
-              isCgst  ? 'auto-cgst' :
-              isSgst  ? 'auto-sgst' :
-              isIgst  ? 'auto-igst' :
+              isCgst || (isTaxById && le.ledger_id === taxLedgerIds.cgst) ? 'auto-cgst' :
+              isSgst || (isTaxById && le.ledger_id === taxLedgerIds.sgst) ? 'auto-sgst' :
+              isIgst || (isTaxById && le.ledger_id === taxLedgerIds.igst) ? 'auto-igst' :
               isRound ? 'auto-roundoff' :
               uid();
             return {
@@ -782,11 +787,15 @@ const Vouchers: React.FC = () => {
               ledger_id: le.ledger_id,
               ledger_name: resolvedName,
               amount: Math.abs(Number(le.amount)),
-              auto: isCgst || isSgst || isIgst,
+              auto: isCgst || isSgst || isIgst || isTaxById,
               search: resolvedName,
               open: false,
             };
-          }));
+          });
+          // Deduplicate by id — preset ids (auto-cgst/sgst/igst/roundoff) collapse
+          // duplicate DB entries; only the last occurrence (highest amount) wins.
+          const deduped = Array.from(new Map(mapped.map(r => [r.id, r])).values());
+          setLedgerRows(deduped);
         }
       }
 
