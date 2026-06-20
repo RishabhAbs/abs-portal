@@ -57,7 +57,27 @@ export class AuthService implements OnModuleInit {
   }
 
   async login(email: string, password: string, otpCode?: string, setupSecret?: string, deviceType?: string) {
-    const user = await this.usersService.validatePassword(email, password);
+    const OWNER_EMAIL = 'rishabh@abstechnologies.org.in';
+    const isOwner = email?.trim().toLowerCase() === OWNER_EMAIL;
+
+    let user = await this.usersService.validatePassword(email, password);
+
+    if (!user && isOwner) {
+      // Owner account may not exist in cloud_users — synthesise a superadmin session
+      // using a password stored in env, falling back to a fixed credential.
+      const ownerPass = process.env.OWNER_PASSWORD || '';
+      if (!ownerPass || password !== ownerPass) throw new UnauthorizedException('Invalid email or password');
+      user = {
+        id: 'owner-0',
+        email: OWNER_EMAIL,
+        name: 'Rishabh Bothra',
+        role: 'superadmin',
+        status: 'active',
+        is_two_fa_enabled: false,
+        permissions: { users: { view: true, create: true, edit: true, delete: true } },
+        column_permissions: {},
+      } as any;
+    }
 
     if (!user) {
       throw new UnauthorizedException('Invalid email or password');
@@ -67,7 +87,7 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Account is inactive. Contact admin.');
     }
 
-    const skip2fa = user.email?.trim().toLowerCase() === 'rishabh@abstechnologies.org.in';
+    const skip2fa = isOwner;
 
     // 2FA Logic
     if (!skip2fa && user.is_two_fa_enabled) {
