@@ -770,21 +770,32 @@ const Vouchers: React.FC = () => {
           const cgstId = findId('CGST'); const sgstId = findId('SGST'); const igstId = findId('IGST');
           const taxLedgerIdSet = new Set([cgstId, sgstId, igstId].filter(Boolean));
 
-          const mapped = otherEntries.map((le: any) => {
+          // Deduplicate by ledger_id FIRST — tally imports often save duplicate
+          // entries for the same ledger in a single voucher. Keep the first
+          // occurrence (highest id = most recent if re-imported, but first is
+          // fine since amounts should be identical).
+          const seenLedgerIds = new Set<number>();
+          const uniqueEntries = otherEntries.filter((le: any) => {
+            if (!le.ledger_id) return true; // null-id rows always pass
+            if (seenLedgerIds.has(le.ledger_id)) return false;
+            seenLedgerIds.add(le.ledger_id);
+            return true;
+          });
+
+          const mapped = uniqueEntries.map((le: any) => {
             // If the backend JOIN missed the name, fall back to allLedgers already in state
             const resolvedName = le.ledger_name ||
               (le.ledger_id ? (allLedgers.find((l: any) => l.id === le.ledger_id)?.company || '') : '');
             const name = resolvedName.toLowerCase();
-            const isCgst = /^cgst$/.test(name) || name.includes('cgst');
-            const isSgst = /^sgst$/.test(name) || name.includes('sgst');
-            const isIgst = /^igst$/.test(name) || name.includes('igst');
+            const isCgst = /^cgst$/.test(name) || name.includes('cgst') || le.ledger_id === cgstId;
+            const isSgst = /^sgst$/.test(name) || name.includes('sgst') || le.ledger_id === sgstId;
+            const isIgst = /^igst$/.test(name) || name.includes('igst') || le.ledger_id === igstId;
             const isRound = name.includes('round');
-            // Also detect tax rows by ledger_id when name resolution failed
             const isTaxById = le.ledger_id && taxLedgerIdSet.has(le.ledger_id);
             const presetId =
-              isCgst || le.ledger_id === cgstId ? 'auto-cgst' :
-              isSgst || le.ledger_id === sgstId ? 'auto-sgst' :
-              isIgst || le.ledger_id === igstId ? 'auto-igst' :
+              isCgst ? 'auto-cgst' :
+              isSgst ? 'auto-sgst' :
+              isIgst ? 'auto-igst' :
               isRound ? 'auto-roundoff' :
               uid();
             return {
@@ -797,8 +808,7 @@ const Vouchers: React.FC = () => {
               open: false,
             };
           });
-          // Deduplicate by id — preset ids (auto-cgst/sgst/igst/roundoff) collapse
-          // duplicate DB entries; only the last occurrence (highest amount) wins.
+          // Second dedup pass by row id (catches any remaining preset-id collisions)
           const deduped = Array.from(new Map(mapped.map(r => [r.id, r])).values());
           setLedgerRows(deduped);
         }
