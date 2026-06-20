@@ -763,7 +763,10 @@ const Vouchers: React.FC = () => {
         // ids — replacing this row instead of duplicating it.
         if (otherEntries.length) {
           setLedgerRows(otherEntries.map((le: any) => {
-            const name = (le.ledger_name || '').toLowerCase();
+            // If the backend JOIN missed the name, fall back to allLedgers already in state
+            const resolvedName = le.ledger_name ||
+              (le.ledger_id ? (allLedgers.find((l: any) => l.id === le.ledger_id)?.company || '') : '');
+            const name = resolvedName.toLowerCase();
             const isCgst = /^cgst$/.test(name) || name.includes('cgst');
             const isSgst = /^sgst$/.test(name) || name.includes('sgst');
             const isIgst = /^igst$/.test(name) || name.includes('igst');
@@ -777,10 +780,10 @@ const Vouchers: React.FC = () => {
             return {
               id: presetId,
               ledger_id: le.ledger_id,
-              ledger_name: le.ledger_name || '',
+              ledger_name: resolvedName,
               amount: Math.abs(Number(le.amount)),
               auto: isCgst || isSgst || isIgst,
-              search: le.ledger_name || '',
+              search: resolvedName,
               open: false,
             };
           }));
@@ -2948,7 +2951,7 @@ const Vouchers: React.FC = () => {
       {/* Batch Entry Popup */}
       {batchPopupIdx !== null && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center pb-16 sm:pb-0 sm:p-4">
-          <div ref={batchPopupRef} className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-xl flex flex-col max-h-[92vh]">
+          <div ref={batchPopupRef} className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-xl flex flex-col h-[60vh] max-h-[92vh]">
             {/* Header */}
             <div className="flex justify-between items-center px-4 py-3.5 border-b border-gray-100 flex-shrink-0">
               <div>
@@ -2967,9 +2970,10 @@ const Vouchers: React.FC = () => {
             )}
 
             {/* Desktop: original table layout */}
-            <div className="hidden sm:block p-4">
+            <div className="hidden sm:flex flex-col flex-1 overflow-hidden px-4 pt-4 pb-2">
+              <div className="overflow-y-auto flex-1">
               <table className="w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-10 bg-white">
                   <tr className="text-[11px] text-gray-500 uppercase bg-gray-50">
                     <th className="py-1.5 px-2 text-left w-8">#</th>
                     <th className="py-1.5 px-2 text-left">Serial / Batch No.</th>
@@ -3042,8 +3046,9 @@ const Vouchers: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+              </div>
               <button onClick={() => setBatchDraft(d => [...d, { id: uid(), batch_name: '', qty: 0, rate: 0, amount: 0, serialSearch: '', serialOpen: false }])}
-                onKeyDown={handleKeyDown} className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 mt-2">
+                onKeyDown={handleKeyDown} className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 mt-2 flex-shrink-0">
                 <Plus size={12} /> Add Serial No.
               </button>
             </div>
