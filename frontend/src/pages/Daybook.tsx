@@ -386,14 +386,14 @@ export default function Daybook() {
       </div>
 
       {/* ── Desktop table ── */}
-      <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3">
+      <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border-b border-slate-300">
         <table className="border-collapse text-[14px] w-full table-fixed">
           <thead>
             <tr>
               <th className={`${headCell} text-left w-[110px]`}>
                 <div className={headBtn} onClick={() => toggleSort('vch_date')}>Vch Date<SortIcon col="vch_date" /></div>
               </th>
-              <th className={`${headCell} text-left`}>
+              <th className={`${headCell} text-left w-full`}>
                 <div className={headBtn} onClick={() => toggleSort('party_name')}>Particulars<SortIcon col="party_name" /></div>
               </th>
               <th className={`${headCell} text-left w-[140px]`}>
@@ -458,7 +458,6 @@ export default function Daybook() {
                 <td colSpan={4} className={`${cell} text-slate-700`}>Total ({filteredRows.length} vouchers)</td>
                 <td className={cellNum + ' text-slate-800'}>{fmt(totalDr)}</td>
                 <td className={cellNum + ' text-slate-800'}>{fmt(totalCr)}</td>
-                <td className={cell} />
               </tr>
             </tfoot>
           )}
