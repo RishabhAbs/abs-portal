@@ -296,23 +296,6 @@ export default function Daybook() {
         </div>
       </div>
 
-      {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
-      <div className="hidden sm:block flex-none bg-white border-b border-slate-200 print:hidden">
-        <div className="flex divide-x divide-slate-200">
-          <div className="flex-1 px-3 py-2.5">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Debit</div>
-            <div className="text-[14px] font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(totalDr)}</div>
-          </div>
-          <div className="flex-1 px-3 py-2.5">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Credit</div>
-            <div className="text-[14px] font-bold text-red-600 tabular-nums mt-0.5">{fmt(totalCr)}</div>
-          </div>
-          <div className="px-3 py-2.5 flex flex-col items-end justify-center">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Entries</div>
-            <div className="text-[14px] font-bold text-slate-700 tabular-nums mt-0.5">{filteredRows.length}</div>
-          </div>
-        </div>
-      </div>
 
       {/* ── Date & filter slide-down ── */}
       {showControls && (
@@ -404,34 +387,34 @@ export default function Daybook() {
 
       {/* ── Desktop table ── */}
       <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3">
-        <table className="border-collapse text-[14px] w-full">
+        <table className="border-collapse text-[14px] w-full table-fixed">
           <thead>
             <tr>
-              <th className={`${headCell} text-left w-28`}>
+              <th className={`${headCell} text-left w-[110px]`}>
                 <div className={headBtn} onClick={() => toggleSort('vch_date')}>Vch Date<SortIcon col="vch_date" /></div>
               </th>
               <th className={`${headCell} text-left`}>
                 <div className={headBtn} onClick={() => toggleSort('party_name')}>Particulars<SortIcon col="party_name" /></div>
               </th>
-              <th className={`${headCell} text-left w-28`}>
+              <th className={`${headCell} text-left w-[140px]`}>
                 <div className={headBtn} onClick={() => toggleSort('vch_no')}>Vch No.<SortIcon col="vch_no" /></div>
               </th>
-              <th className={`${headCell} text-left w-28`}>
+              <th className={`${headCell} text-left w-[120px]`}>
                 <div className={headBtn} onClick={() => toggleSort('vch_type_name')}>Vch Type<SortIcon col="vch_type_name" /></div>
               </th>
-              <th className={`${headCell} text-right w-32`}>
+              <th className={`${headCell} text-right w-[140px]`}>
                 <div className={headBtn + ' justify-end'} onClick={() => toggleSort('dr_amount')}>Debit<SortIcon col="dr_amount" /></div>
               </th>
-              <th className={`${headCell} text-right w-32`}>
+              <th className={`${headCell} text-right w-[140px]`}>
                 <div className={headBtn + ' justify-end'} onClick={() => toggleSort('cr_amount')}>Credit<SortIcon col="cr_amount" /></div>
               </th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
+              <tr><td colSpan={6} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
             ) : filteredRows.length === 0 ? (
-              <tr><td colSpan={7} className={`${cell} text-center text-slate-400 py-6`}>
+              <tr><td colSpan={6} className={`${cell} text-center text-slate-400 py-6`}>
                 {search
                   ? `No vouchers matching "${search}" between ${displayDate(dateFrom)} and ${displayDate(dateTo)}`
                   : (dateFrom === dateTo
