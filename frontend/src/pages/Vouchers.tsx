@@ -1,11 +1,120 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2 } from 'lucide-react';
+import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer } from 'lucide-react';
 import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
 
 const MY_STATE = 'Assam';
+
+const COMPANY_KEY = 'print-voucher-company';
+const BANKS_KEY   = 'print-voucher-banks';
+const TERMS_KEY   = 'print-voucher-terms';
+const ACTIVE_BANK_KEY = 'print-voucher-active-bank';
+
+const DEFAULT_COMPANY = {
+  name:    'ABS Technologies',
+  address: '1st Floor, Ram Kumar Plaza, A.T. Road,\nChatribari, Guwahati, Assam, 781001',
+  email:   'accounts@abstechnologies.co.in',
+  phone:   '9706050760',
+  gstin:   '18ACMFA5628G1Z7',
+  logo_url: '/logo.png',
+};
+const DEFAULT_BANK = {
+  id: 'default',
+  account_name:   'ABS Technologies',
+  account_number: '50200117974614',
+  ifsc:           'HDFC0004707',
+  bank_name:      'HDFC Bank',
+  branch:         'Paltan Bazar',
+  upi_id:         'abstechnologies@hdfcbank',
+  qr_image:       '',
+};
+const DEFAULT_TERMS = [
+  'Payment of bill must be made within 15 Days.',
+  'Subject to Guwahati Jurisdiction.',
+  'Services once activated are non-refundable.',
+  'This is a computer generated invoice and does not require physical signature.',
+];
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return { ...fallback, ...JSON.parse(raw) };
+  } catch { /* ignore */ }
+  return fallback;
+}
+function loadList<T>(key: string, fallback: T[]): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    }
+  } catch { /* ignore */ }
+  return fallback;
+}
+
+const displayDate = (s?: string | null) => {
+  if (!s) return '';
+  const d = new Date(s);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+};
+
+const addDays = (s: string, n: number) => {
+  if (!s) return '';
+  const d = new Date(s);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+};
+
+function numberToWords(n: number): string {
+  if (n == null || isNaN(n)) return '';
+  const num = Math.round(Math.abs(n) * 100) / 100;
+  const rupees = Math.floor(num);
+  const paise = Math.round((num - rupees) * 100);
+
+  const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten',
+    'Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+  const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+
+  const twoDigits = (x: number): string => {
+    if (x < 20) return ones[x];
+    return tens[Math.floor(x / 10)] + (x % 10 ? ' ' + ones[x % 10] : '');
+  };
+  const threeDigits = (x: number): string => {
+    const h = Math.floor(x / 100);
+    const r = x % 100;
+    return (h ? ones[h] + ' Hundred' + (r ? ' ' : '') : '') + (r ? twoDigits(r) : '');
+  };
+  if (rupees === 0 && paise === 0) return 'Zero Rupees Only';
+
+  let out = '';
+  const crore = Math.floor(rupees / 10000000);
+  const lakh  = Math.floor((rupees % 10000000) / 100000);
+  const thousand = Math.floor((rupees % 100000) / 1000);
+  const rest = rupees % 1000;
+  if (crore)    out += twoDigits(crore) + ' Crore ';
+  if (lakh)     out += twoDigits(lakh) + ' Lakh ';
+  if (thousand) out += twoDigits(thousand) + ' Thousand ';
+  if (rest)     out += threeDigits(rest);
+  out = out.trim();
+  if (out === '') out = 'Zero';
+  let result = `${out} Rupees`;
+  if (paise > 0) result += ` and ${twoDigits(paise)} Paise`;
+  return result + ' Only';
+}
+
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex text-[12px] py-0.5">
+      <div className="w-32 text-slate-600">{label}</div>
+      <div className="text-slate-400 mx-1">:</div>
+      <div className="flex-1 text-slate-900">{value || '—'}</div>
+    </div>
+  );
+}
 
 interface BatchRow {
   id: string;
@@ -104,6 +213,17 @@ interface VchTypeItem {
 const Vouchers: React.FC = () => {
   const { user, isAdmin, canCheckPermission, canDelete, canEdit } = useAuth();
   const { showSuccess, showError } = useToast();
+
+  // --- Print States ---
+  const [printCompany] = useState(() => loadJson(COMPANY_KEY, DEFAULT_COMPANY));
+  const [printBanks]     = useState(() => loadList(BANKS_KEY, [DEFAULT_BANK]));
+  const [printActiveBankId] = useState(() => localStorage.getItem(ACTIVE_BANK_KEY) || 'default');
+  const [printTerms]     = useState(() => loadList(TERMS_KEY, DEFAULT_TERMS));
+  const [printBillTo, setPrintBillTo]   = useState({
+    name: '', address1: '', address2: '', city: '', state: '',
+    pincode: '', gstin: '', phone: '', email: '', contact: ''
+  });
+
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // 'mark' = confirm marking as Checked, 'unmark' = confirm removing the flag.
@@ -247,6 +367,12 @@ const Vouchers: React.FC = () => {
     const vt = voucherType.toLowerCase();
     const parent = (allVchTypes.find(t => t.id === selectedParentId)?.name || '').toLowerCase();
     return vt.includes('purchase') || vt.includes('debit') || parent.includes('purchase') || parent.includes('debit');
+  })();
+
+  const isSalesType = (() => {
+    const vt = voucherType.toLowerCase();
+    const parent = (allVchTypes.find(t => t.id === selectedParentId)?.name || '').toLowerCase();
+    return vt.includes('sales') || parent.includes('sales') || vt.includes('tax invoice') || parent.includes('tax invoice');
   })();
 
   // Journal mode = Contra / Journal / Payment / Receipt — no inventory, Dr/Cr ledger table
@@ -827,6 +953,75 @@ const Vouchers: React.FC = () => {
       }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editVoucherData, allVchTypes.length, allLedgers.length]);
+
+  // Sync print Bill To details whenever partyId / editVoucherData changes
+  useEffect(() => {
+    if (editVoucherData) {
+      setPrintBillTo({
+        name:     editVoucherData.party_name           || '',
+        address1: editVoucherData.party_address1       || '',
+        address2: editVoucherData.party_address2       || '',
+        city:     editVoucherData.party_city           || '',
+        state:    editVoucherData.party_state          || '',
+        pincode:  editVoucherData.party_pincode ? String(editVoucherData.party_pincode) : '',
+        gstin:    editVoucherData.party_gst            || '',
+        phone:    editVoucherData.party_mobile ? String(editVoucherData.party_mobile) : '',
+        email:    editVoucherData.party_email          || '',
+        contact:  editVoucherData.party_contact_person || '',
+      });
+      // Fetch full customer details to merge any newer/fuller fields
+      if (editVoucherData.party_ledger_id) {
+        customersApi.getById(String(editVoucherData.party_ledger_id))
+          .then(res => {
+            if (res?.success && res.data) {
+              const c = res.data;
+              setPrintBillTo(prev => ({
+                ...prev,
+                address1: c.address1 || prev.address1,
+                address2: c.address2 || prev.address2,
+                city: c.pincode_city || c.city || prev.city,
+                state: c.state_name || c.state || prev.state,
+                pincode: c.pincode ? String(c.pincode) : prev.pincode,
+                gstin: c.gstin || prev.gstin,
+                phone: c.mobile ? String(c.mobile) : prev.phone,
+                email: c.email || prev.email,
+                contact: c.person || c.contact_person || prev.contact,
+              }));
+            }
+          })
+          .catch(() => {});
+      }
+    } else if (partyId) {
+      customersApi.getById(partyId)
+        .then(res => {
+          if (res?.success && res.data) {
+            const c = res.data;
+            setPrintBillTo({
+              name: c.company || partyDisplay || '',
+              address1: c.address1 || '',
+              address2: c.address2 || '',
+              city: c.pincode_city || c.city || '',
+              state: c.state_name || c.state || '',
+              pincode: c.pincode ? String(c.pincode) : '',
+              gstin: c.gstin || '',
+              phone: c.mobile ? String(c.mobile) : '',
+              email: c.email || '',
+              contact: c.person || c.contact_person || '',
+            });
+          } else {
+            setPrintBillTo(b => ({ ...b, name: partyDisplay, state: partyState }));
+          }
+        })
+        .catch(() => {
+          setPrintBillTo(b => ({ ...b, name: partyDisplay, state: partyState }));
+        });
+    } else {
+      setPrintBillTo({
+        name: '', address1: '', address2: '', city: '', state: '',
+        pincode: '', gstin: '', phone: '', email: '', contact: ''
+      });
+    }
+  }, [partyId, partyDisplay, editVoucherData, partyState]);
 
   // Live party autocomplete
   useEffect(() => {
@@ -1552,6 +1747,7 @@ const Vouchers: React.FC = () => {
 
   return (
     <>
+      <div className="print:hidden">
     {/* ── Mobile Wizard (small screens only) ── */}
     <div className="block md:hidden min-h-screen bg-gray-50 pb-24">
       {readOnly && (
@@ -2047,6 +2243,13 @@ const Vouchers: React.FC = () => {
               ⚠ Complete Bill Allocation — Balance ₹{fmt(Math.abs(billAllocBalance))} remaining
             </button>
           )}
+          {isSalesType && partyId && lines.some(l => l.product_id) && (
+            <button type="button"
+              onClick={() => window.print()}
+              className="w-full mb-2 bg-blue-600 hover:bg-blue-700 text-white text-base font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
+              <Printer size={18} /> Print Voucher
+            </button>
+          )}
           <button type="button"
             onClick={handleSubmit}
             disabled={submitting || readOnly}
@@ -2155,6 +2358,15 @@ const Vouchers: React.FC = () => {
               className={`${canMarkAsChecked ? 'ml-2' : 'ml-auto'} inline-flex items-center gap-1 text-xs font-medium text-red-700 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2.5 py-1`}
               title="Delete voucher">
               <Trash2 size={12} /> Delete
+            </button>
+          )}
+
+          {isSalesType && partyId && lines.some(l => l.product_id) && (
+            <button type="button"
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 border border-blue-300 bg-blue-50 hover:bg-blue-100 rounded px-2.5 py-1 ml-2"
+              title="Print Voucher">
+              <Printer size={12} /> Print
             </button>
           )}
         </div>
@@ -3563,6 +3775,209 @@ const Vouchers: React.FC = () => {
                   className="w-full py-2.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white rounded-xl font-medium">
                   {billAllocBalanced ? 'Done' : `Balance: ₹${fmt(Math.abs(billAllocBalance))} remaining`}
                 </button>
+              </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </div>
+
+      {/* ── Print-only invoice preview layout ── */}
+      {isSalesType && partyId && lines.some(l => l.product_id) && (
+        <div className="print-only">
+          <div className="invoice-page bg-white text-slate-900 mx-auto" style={{ maxWidth: '820px', minHeight: '1100px' }}>
+            <style>{`
+              @media print {
+                @page { size: A4; margin: 10mm; }
+                .invoice-page { box-shadow: none !important; max-width: 100% !important; }
+              }
+            `}</style>
+            <div className="shadow-sm border border-slate-200 print:border-0 print:shadow-none p-8 print:p-0">
+              {/* Header */}
+              <div className="flex items-start gap-4 pb-4 border-b border-slate-200">
+                {printCompany.logo_url && (
+                  <img src={printCompany.logo_url} alt={printCompany.name}
+                    onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    className="w-20 h-20 object-contain flex-shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-2xl font-bold text-emerald-800">{printCompany.name}</div>
+                  <div className="text-[12px] text-slate-700 whitespace-pre-line">{printCompany.address}</div>
+                  <div className="text-[12px] text-slate-700 mt-1">
+                    ✉ {printCompany.email}  &nbsp;·&nbsp;  ☎ {printCompany.phone}
+                  </div>
+                  <div className="text-[12px] font-semibold text-slate-800 mt-0.5">GSTIN: {printCompany.gstin}</div>
+                </div>
+              </div>
+
+              {/* Title */}
+              <div className="text-center py-4">
+                <div className="text-2xl font-bold text-emerald-800 tracking-wide">TAX INVOICE</div>
+              </div>
+
+              {/* Invoice + Bill To */}
+              <div className="grid grid-cols-2 gap-4 mb-3">
+                <div className="border border-slate-200 rounded p-3 bg-slate-50/50">
+                  <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Invoice Details</div>
+                  <KV label="Invoice No."     value={voucherNo || '—'} />
+                  <KV label="Invoice Date"    value={displayDate(voucherDate)} />
+                  <KV label="Due Date"        value={displayDate(addDays(voucherDate, 15))} />
+                  <KV label="Place of Supply" value={printBillTo.state || 'Assam'} />
+                  <KV label="Reverse Charge"  value="No" />
+                  <KV label="Payment Terms"   value="Due within 15 Days" />
+                </div>
+                <div className="border border-slate-200 rounded p-3 bg-slate-50/50">
+                  <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Bill To</div>
+                  <div className="font-semibold text-[14px] text-slate-900">{printBillTo.name || partyDisplay || '—'}</div>
+                  {[printBillTo.address1, printBillTo.address2, [printBillTo.city, printBillTo.state, printBillTo.pincode].filter(Boolean).join(', ')].filter(Boolean).map((l, i) => (
+                    <div key={i} className="text-[12px] text-slate-700">{l}</div>
+                  ))}
+                  <div className="mt-1.5 space-y-0.5">
+                    {printBillTo.gstin   && <KV label="GSTIN"          value={printBillTo.gstin} />}
+                    {printBillTo.contact && <KV label="Contact Person" value={printBillTo.contact} />}
+                    {printBillTo.phone   && <KV label="Phone"          value={printBillTo.phone} />}
+                    {printBillTo.email   && <KV label="Email"          value={printBillTo.email} />}
+                  </div>
+                </div>
+              </div>
+
+              {/* Items table */}
+              <table className="w-full border-collapse text-[12px] mb-3">
+                <thead>
+                  <tr className="bg-emerald-800 text-white">
+                    <th className="border border-emerald-900 px-2 py-2 text-left w-12">Sr. No.</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-left">Description</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-left w-20">SAC</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-left w-20">GST Rate</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-right w-14">Qty</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-right w-24">Rate (₹)</th>
+                    <th className="border border-emerald-900 px-2 py-2 text-right w-28">Amount (₹)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.filter(l => l.product_id).map((it, i) => {
+                    const prod = products.find(p => String(p.id) === String(it.product_id));
+                    return (
+                      <tr key={i}>
+                        <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{i + 1}.</td>
+                        <td className="border border-slate-200 px-2 py-1.5">{it.item_name}</td>
+                        <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{prod?.hsn || '—'}</td>
+                        <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{it.gst_rate}%</td>
+                        <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{it.qty}</td>
+                        <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{fmt(it.rate)}</td>
+                        <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{fmt(it.amount)}</td>
+                      </tr>
+                    );
+                  })}
+                  {lines.filter(l => l.product_id).length > 0 && (
+                    <>
+                      <tr>
+                        <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{lines.filter(l => l.product_id).length + 1}.</td>
+                        <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total Taxable Amount</td>
+                        <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(subtotal)}</td>
+                      </tr>
+                      {!isIgst && totalCgst > 0 && (
+                        <tr>
+                          <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{lines.filter(l => l.product_id).length + 2}.</td>
+                          <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right">CGST</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{fmt(totalCgst)}</td>
+                        </tr>
+                      )}
+                      {!isIgst && totalSgst > 0 && (
+                        <tr>
+                          <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{lines.filter(l => l.product_id).length + 3}.</td>
+                          <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right">SGST</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{fmt(totalSgst)}</td>
+                        </tr>
+                      )}
+                      {isIgst && totalIgst > 0 && (
+                        <tr>
+                          <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{lines.filter(l => l.product_id).length + 2}.</td>
+                          <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right">IGST</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
+                          <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{fmt(totalIgst)}</td>
+                        </tr>
+                      )}
+                      <tr>
+                        <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{lines.filter(l => l.product_id).length + (isIgst ? 3 : 4)}.</td>
+                        <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total GST Amount</td>
+                        <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(totalCgst + totalSgst + totalIgst)}</td>
+                      </tr>
+                      <tr className="bg-emerald-50">
+                        <td className="border border-slate-200 px-2 py-2 text-center tabular-nums">{lines.filter(l => l.product_id).length + (isIgst ? 4 : 5)}.</td>
+                        <td colSpan={5} className="border border-slate-200 px-2 py-2 text-right font-bold text-emerald-800 uppercase tracking-wide">Total Amount Payable</td>
+                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums font-bold text-emerald-800">{fmt(grandTotal)}</td>
+                      </tr>
+                    </>
+                  )}
+                </tbody>
+              </table>
+
+              {/* Amount in words */}
+              {lines.filter(l => l.product_id).length > 0 && (
+                <div className="mb-3 p-2.5 bg-slate-50/50 border border-slate-200 rounded">
+                  <div className="text-[11px] font-bold text-slate-700 uppercase">Amount in Words:</div>
+                  <div className="text-[13px] font-medium text-slate-800">{numberToWords(grandTotal)}</div>
+                </div>
+              )}
+
+              {/* Footer: bank | terms | sign */}
+              {(() => {
+                const activeBank = printBanks.find(b => b.id === printActiveBankId) || printBanks[0] || DEFAULT_BANK;
+                return (
+                  <div className="grid grid-cols-3 gap-4 pt-3 border-t border-slate-200">
+                    <div>
+                      <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Bank Details</div>
+                      <KV label="Account Name" value={activeBank.account_name} />
+                      <KV label="Account Number" value={activeBank.account_number} />
+                      <KV label="IFSC Code" value={activeBank.ifsc} />
+                      <KV label="Bank Name" value={activeBank.bank_name} />
+                      {activeBank.branch && <KV label="Branch" value={activeBank.branch} />}
+                      {(activeBank.upi_id || activeBank.qr_image) && (
+                        <div className="mt-2 flex items-start gap-3">
+                          {activeBank.qr_image && (
+                            <img src={activeBank.qr_image} alt="UPI QR"
+                              className="w-20 h-20 object-contain border border-slate-200 rounded bg-white flex-shrink-0" />
+                          )}
+                          {activeBank.upi_id && (
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] text-slate-500">UPI ID:</div>
+                              <div className="text-[12px] font-medium break-all">{activeBank.upi_id}</div>
+                              <div className="text-[10px] text-slate-500">Scan & Pay</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Terms & Conditions</div>
+                      <ol className="text-[11px] text-slate-700 space-y-1">
+                        {printTerms.map((t, i) => (
+                          <li key={i} className="flex gap-1.5">
+                            <span className="text-slate-400 tabular-nums">{i + 1}.</span>
+                            <span>{t}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">For {printCompany.name}</div>
+                      <div className="h-20"></div>
+                      <div className="border-t border-slate-400 mx-auto pt-1 text-[11px] text-slate-700" style={{ maxWidth: '200px' }}>
+                        Authorised Signatory
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="text-center text-[11px] text-emerald-700 font-medium pt-3 mt-3 border-t border-slate-200">
+                ♥ Thank you for your business!
               </div>
             </div>
           </div>

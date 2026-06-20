@@ -67,7 +67,7 @@ export default function StockSummary() {
   const [debouncedSearch, setDebouncedSearch] = useState<string>(initial.search);
   // Hide rows that are pure zero (no opening, no movement, no closing) so
   // the report stays focused on items that actually moved.
-  const [hideZero, setHideZero] = useState<boolean>(true);
+  const [hideZero, setHideZero] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState({ opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
