@@ -84,6 +84,7 @@ export default function LedgerReport() {
   const [pickerResults, setPickerResults] = useState<any[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
 
+  const snapDoneRef = React.useRef<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const [opening, setOpening] = useState(0);
@@ -140,21 +141,22 @@ export default function LedgerReport() {
         if (res.data.ledger && res.data.ledger.company !== ledgerName) {
           setLedgerName(res.data.ledger.company);
         }
-        // Snap "From"/"To" to the 1st/last day of the most recent entry's
-        // month, so the visible range tightens to where the ledger's
-        // activity actually is instead of sitting on the FY-start default.
-        // Take the max date across all rows rather than trusting array order.
-        let latest: Date | null = null;
-        for (const r of newRows) {
-          if (!r.vch_date) continue;
-          const d = new Date(r.vch_date);
-          if (!latest || d > latest) latest = d;
-        }
-        if (latest) {
-          const monthStart = toInputDate(new Date(latest.getFullYear(), latest.getMonth(), 1));
-          const monthEnd = toInputDate(new Date(latest.getFullYear(), latest.getMonth() + 1, 0));
-          if (monthStart !== dateFrom) setDateFrom(monthStart);
-          if (monthEnd !== dateTo) setDateTo(monthEnd);
+        // Snap "From"/"To" to the most recent entry's month — but only on
+        // the first load for this ledger so manual date changes aren't overridden.
+        if (snapDoneRef.current !== ledgerId) {
+          snapDoneRef.current = ledgerId;
+          let latest: Date | null = null;
+          for (const r of newRows) {
+            if (!r.vch_date) continue;
+            const d = new Date(r.vch_date);
+            if (!latest || d > latest) latest = d;
+          }
+          if (latest) {
+            const monthStart = toInputDate(new Date(latest.getFullYear(), latest.getMonth(), 1));
+            const monthEnd = toInputDate(new Date(latest.getFullYear(), latest.getMonth() + 1, 0));
+            if (monthStart !== dateFrom) setDateFrom(monthStart);
+            if (monthEnd !== dateTo) setDateTo(monthEnd);
+          }
         }
       }
     } catch {

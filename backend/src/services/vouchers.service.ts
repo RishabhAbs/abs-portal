@@ -924,21 +924,28 @@ export class VouchersService implements OnModuleInit {
         if (opts.dateTo)   { where.push('v.vch_date <= ?'); params.push(opts.dateTo); }
         const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
+        // Aggregate at the TOP-LEVEL parent group. Each ledger's group is
+        // walked up one level: if the ledger's group has a parent, use the
+        // parent; otherwise use the group itself. Ungrouped ledgers land in
+        // a virtual "Ungrouped" bucket.
+        // Walk up to root: if a ledger's group has a parent, aggregate under
+        // the root ancestor so only top-level groups appear on the summary.
         const rows = await this.db.query<any>(
-            `SELECT lg.id                                          AS group_id,
-                    COALESCE(lg.name, 'Ungrouped')                 AS group_name,
-                    COUNT(DISTINCT c.id)                           AS ledger_count,
-                    COUNT(DISTINCT le.vch_id)                      AS voucher_count,
-                    COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount ELSE 0 END), 0) AS total_debit,
+            `SELECT COALESCE(root.id, lg.id)                             AS group_id,
+                    MIN(COALESCE(root.name, lg.name, 'Ungrouped'))       AS group_name,
+                    COUNT(DISTINCT c.id)                                  AS ledger_count,
+                    COUNT(DISTINCT le.vch_id)                             AS voucher_count,
+                    COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount  ELSE 0 END), 0) AS total_debit,
                     COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0) AS total_credit,
-                    COALESCE(SUM(le.amount), 0)                    AS net_balance
+                    COALESCE(SUM(le.amount), 0)                           AS net_balance
              FROM ledger_entries le
-             INNER JOIN vch_details v ON le.vch_id = v.id
-             LEFT JOIN customer c ON le.ledger_id = c.id
-             LEFT JOIN ledgergroup lg ON c.ledgergroup = lg.id
+             INNER JOIN vch_details v     ON le.vch_id = v.id
+             LEFT  JOIN customer c        ON le.ledger_id = c.id
+             LEFT  JOIN ledgergroup lg    ON c.ledgergroup = lg.id
+             LEFT  JOIN ledgergroup root  ON lg.parent_id = root.id
              ${whereSql}
-             GROUP BY lg.id, lg.name
-             ORDER BY ABS(SUM(le.amount)) DESC, lg.name ASC`,
+             GROUP BY COALESCE(root.id, lg.id)
+             ORDER BY MIN(COALESCE(root.name, lg.name)) ASC`,
             params,
         );
 
@@ -947,17 +954,17 @@ export class VouchersService implements OnModuleInit {
             .map((r: any) => ({
                 group_id:      r.group_id,
                 group_name:    r.group_name,
-                ledger_count:  Number(r.ledger_count) || 0,
+                ledger_count:  Number(r.ledger_count)  || 0,
                 voucher_count: Number(r.voucher_count) || 0,
-                total_debit:   +Number(r.total_debit  || 0).toFixed(2),
-                total_credit:  +Number(r.total_credit || 0).toFixed(2),
-                net_balance:   +Number(r.net_balance  || 0).toFixed(2),
+                total_debit:   +Number(r.total_debit   || 0).toFixed(2),
+                total_credit:  +Number(r.total_credit  || 0).toFixed(2),
+                net_balance:   +Number(r.net_balance   || 0).toFixed(2),
             }))
             .filter((g: any) => !search || g.group_name.toLowerCase().includes(search));
 
         const totals = data.reduce((acc, g) => ({
-            debit:   acc.debit + g.total_debit,
-            credit:  acc.credit + g.total_credit,
+            debit:   acc.debit   + g.total_debit,
+            credit:  acc.credit  + g.total_credit,
             balance: acc.balance + g.net_balance,
         }), { debit: 0, credit: 0, balance: 0 });
 
@@ -989,100 +996,164 @@ export class VouchersService implements OnModuleInit {
         dateTo?: string;
         search?: string;
     }) {
-        // Customer rows in the group, with their master opening pre-signed
-        // so a Cr opening shows as a negative number.
-        const where: string[] = ['c.ledgergroup = ?'];
-        const params: any[] = [opts.groupId];
-        if (opts.search) {
-            where.push('c.company LIKE ?');
-            params.push(`%${opts.search}%`);
-        }
-        const customers = await this.db.query<any>(
-            `SELECT c.id, c.company,
-                    COALESCE(c.opening_balance, 0) *
-                      CASE WHEN c.opening_balance_type = 'Cr' THEN -1 ELSE 1 END AS master_opening
-             FROM customer c
-             WHERE ${where.join(' AND ')}
-             ORDER BY c.company ASC`,
-            params,
+        const group = await this.db.queryOne<any>(
+            `SELECT id, name, parent_id FROM ledgergroup WHERE id = ?`, [opts.groupId],
         );
-        if (customers.length === 0) {
-            return {
-                group: await this.db.queryOne<any>(`SELECT id, name FROM ledgergroup WHERE id = ?`, [opts.groupId]),
-                rows: [],
-                totals: { opening: 0, debit: 0, credit: 0, closing: 0 },
-            };
-        }
 
-        // Activity strictly before dateFrom — rolled into the period
-        // opening so the report reads correctly for partial-FY windows.
-        const priorWhere: string[] = [];
-        const priorParams: any[] = [];
-        if (opts.dateFrom) { priorWhere.push('v.vch_date < ?'); priorParams.push(opts.dateFrom); }
-        const priorRows = opts.dateFrom ? await this.db.query<any>(
-            `SELECT le.ledger_id, COALESCE(SUM(le.amount), 0) AS prior_total
-             FROM ledger_entries le
-             INNER JOIN vch_details v ON le.vch_id = v.id
-             WHERE le.ledger_id IN (${customers.map(() => '?').join(',')})
-               ${priorWhere.length ? 'AND ' + priorWhere.join(' AND ') : ''}
-             GROUP BY le.ledger_id`,
-            [...customers.map((c: any) => c.id), ...priorParams],
-        ) : [];
-        const priorByLed = new Map<number, number>();
-        for (const r of priorRows) priorByLed.set(Number(r.ledger_id), Number(r.prior_total) || 0);
+        // Child sub-groups of this parent group
+        const childGroups = await this.db.query<any>(
+            `SELECT id, name FROM ledgergroup WHERE parent_id = ? ORDER BY name ASC`,
+            [opts.groupId],
+        );
 
-        // In-range debit/credit split.
+        // Build date range SQL snippets (reused for sub-group + direct ledger queries)
         const rangeWhere: string[] = [];
         const rangeParams: any[] = [];
         if (opts.dateFrom) { rangeWhere.push('v.vch_date >= ?'); rangeParams.push(opts.dateFrom); }
         if (opts.dateTo)   { rangeWhere.push('v.vch_date <= ?'); rangeParams.push(opts.dateTo); }
         const rangeSql = rangeWhere.length ? 'AND ' + rangeWhere.join(' AND ') : '';
-        const rangeRows = await this.db.query<any>(
-            `SELECT le.ledger_id,
-                    COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount ELSE 0 END), 0)        AS debit_total,
-                    COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0)   AS credit_total
-             FROM ledger_entries le
-             INNER JOIN vch_details v ON le.vch_id = v.id
-             WHERE le.ledger_id IN (${customers.map(() => '?').join(',')})
-               ${rangeSql}
-             GROUP BY le.ledger_id`,
-            [...customers.map((c: any) => c.id), ...rangeParams],
-        );
-        const rangeByLed = new Map<number, { debit: number; credit: number }>();
-        for (const r of rangeRows) rangeByLed.set(Number(r.ledger_id), {
-            debit:  Number(r.debit_total)  || 0,
-            credit: Number(r.credit_total) || 0,
-        });
 
-        const data = customers.map((c: any) => {
-            const masterOpening = Number(c.master_opening) || 0;
-            const prior = priorByLed.get(Number(c.id)) || 0;
-            const opening = +(masterOpening + prior).toFixed(2);
-            const split = rangeByLed.get(Number(c.id)) || { debit: 0, credit: 0 };
-            const closing = +(opening + split.debit - split.credit).toFixed(2);
-            return {
-                ledger_id:    c.id,
-                ledger_name:  c.company || '—',
+        const priorWhere = opts.dateFrom ? 'AND v.vch_date < ?' : '';
+        const priorParams = opts.dateFrom ? [opts.dateFrom] : [];
+
+        // Aggregate each child sub-group's ledgers into one summary row
+        const subGroupRows: any[] = [];
+        for (const cg of childGroups) {
+            const cgCustomers = await this.db.query<any>(
+                `SELECT c.id,
+                        COALESCE(c.opening_balance, 0) *
+                          CASE WHEN c.opening_balance_type = 'Cr' THEN -1 ELSE 1 END AS master_opening
+                 FROM customer c WHERE c.ledgergroup = ?`,
+                [cg.id],
+            );
+            if (cgCustomers.length === 0) {
+                subGroupRows.push({
+                    row_type: 'subgroup',
+                    ledger_id: null,
+                    group_id: cg.id,
+                    ledger_name: cg.name,
+                    ledger_count: 0,
+                    opening_balance: 0,
+                    debit_total: 0,
+                    credit_total: 0,
+                    closing_balance: 0,
+                });
+                continue;
+            }
+            const ids = cgCustomers.map((c: any) => c.id);
+            const idList = ids.map(() => '?').join(',');
+            const masterOpeningSum = cgCustomers.reduce((s: number, c: any) => s + (Number(c.master_opening) || 0), 0);
+
+            const [priorRow] = opts.dateFrom ? await this.db.query<any>(
+                `SELECT COALESCE(SUM(le.amount), 0) AS prior_total
+                 FROM ledger_entries le
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 WHERE le.ledger_id IN (${idList}) ${priorWhere}`,
+                [...ids, ...priorParams],
+            ) : [{ prior_total: 0 }];
+
+            const [rangeRow] = await this.db.query<any>(
+                `SELECT COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount ELSE 0 END), 0) AS debit_total,
+                        COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0) AS credit_total
+                 FROM ledger_entries le
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 WHERE le.ledger_id IN (${idList}) ${rangeSql}`,
+                [...ids, ...rangeParams],
+            );
+
+            const opening = +(masterOpeningSum + (Number(priorRow?.prior_total) || 0)).toFixed(2);
+            const debit   = +Number(rangeRow?.debit_total  || 0).toFixed(2);
+            const credit  = +Number(rangeRow?.credit_total || 0).toFixed(2);
+            subGroupRows.push({
+                row_type: 'subgroup',
+                ledger_id: null,
+                group_id: cg.id,
+                ledger_name: cg.name,
+                ledger_count: ids.length,
                 opening_balance: opening,
-                debit_total:  +split.debit.toFixed(2),
-                credit_total: +split.credit.toFixed(2),
-                closing_balance: closing,
-            };
-        });
+                debit_total:  debit,
+                credit_total: credit,
+                closing_balance: +(opening + debit - credit).toFixed(2),
+            });
+        }
 
-        const totals = data.reduce((acc, r) => ({
+        // Direct ledgers whose group IS this parent group
+        const directWhere: string[] = ['c.ledgergroup = ?'];
+        const directParams: any[] = [opts.groupId];
+        if (opts.search) { directWhere.push('c.company LIKE ?'); directParams.push(`%${opts.search}%`); }
+        const customers = await this.db.query<any>(
+            `SELECT c.id, c.company,
+                    COALESCE(c.opening_balance, 0) *
+                      CASE WHEN c.opening_balance_type = 'Cr' THEN -1 ELSE 1 END AS master_opening
+             FROM customer c
+             WHERE ${directWhere.join(' AND ')}
+             ORDER BY c.company ASC`,
+            directParams,
+        );
+
+        let ledgerRows: any[] = [];
+        if (customers.length > 0) {
+            const ids = customers.map((c: any) => c.id);
+            const idList = ids.map(() => '?').join(',');
+
+            const priorRows = opts.dateFrom ? await this.db.query<any>(
+                `SELECT le.ledger_id, COALESCE(SUM(le.amount), 0) AS prior_total
+                 FROM ledger_entries le
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 WHERE le.ledger_id IN (${idList}) ${priorWhere}
+                 GROUP BY le.ledger_id`,
+                [...ids, ...priorParams],
+            ) : [];
+            const priorByLed = new Map<number, number>();
+            for (const r of priorRows) priorByLed.set(Number(r.ledger_id), Number(r.prior_total) || 0);
+
+            const rangeRows = await this.db.query<any>(
+                `SELECT le.ledger_id,
+                        COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount ELSE 0 END), 0) AS debit_total,
+                        COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0) AS credit_total
+                 FROM ledger_entries le
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 WHERE le.ledger_id IN (${idList}) ${rangeSql}
+                 GROUP BY le.ledger_id`,
+                [...ids, ...rangeParams],
+            );
+            const rangeByLed = new Map<number, { debit: number; credit: number }>();
+            for (const r of rangeRows) rangeByLed.set(Number(r.ledger_id), {
+                debit:  Number(r.debit_total)  || 0,
+                credit: Number(r.credit_total) || 0,
+            });
+
+            ledgerRows = customers.map((c: any) => {
+                const masterOpening = Number(c.master_opening) || 0;
+                const prior = priorByLed.get(Number(c.id)) || 0;
+                const opening = +(masterOpening + prior).toFixed(2);
+                const split = rangeByLed.get(Number(c.id)) || { debit: 0, credit: 0 };
+                const closing = +(opening + split.debit - split.credit).toFixed(2);
+                return {
+                    row_type: 'ledger',
+                    ledger_id:    c.id,
+                    group_id: null,
+                    ledger_name:  c.company || '—',
+                    ledger_count: null,
+                    opening_balance: opening,
+                    debit_total:  +split.debit.toFixed(2),
+                    credit_total: +split.credit.toFixed(2),
+                    closing_balance: closing,
+                };
+            });
+        }
+
+        const allRows = [...subGroupRows, ...ledgerRows];
+        const totals = allRows.reduce((acc, r) => ({
             opening: acc.opening + r.opening_balance,
-            debit:   acc.debit + r.debit_total,
-            credit:  acc.credit + r.credit_total,
+            debit:   acc.debit   + r.debit_total,
+            credit:  acc.credit  + r.credit_total,
             closing: acc.closing + r.closing_balance,
         }), { opening: 0, debit: 0, credit: 0, closing: 0 });
 
-        const group = await this.db.queryOne<any>(
-            `SELECT id, name FROM ledgergroup WHERE id = ?`, [opts.groupId],
-        );
         return {
             group: group || { id: opts.groupId, name: 'Unknown' },
-            rows: data,
+            rows: allRows,
             totals: {
                 opening: +totals.opening.toFixed(2),
                 debit:   +totals.debit.toFixed(2),

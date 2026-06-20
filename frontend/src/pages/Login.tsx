@@ -36,11 +36,11 @@ const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      // Pass secret if we are in setup mode
-      const result = await login(email.trim(), password, otp, setupData?.secret);
+      const result = await login(email.trim(), password, otp);
 
       if (result.require_2fa) {
         setShowOtp(true);
+        setSetupData(null);
         setLoading(false);
         setError('');
         return;
@@ -49,7 +49,7 @@ const Login: React.FC = () => {
       if (result.setup_2fa && result.otpauthUrl && result.secret) {
         setSetupData({ secret: result.secret, otpauthUrl: result.otpauthUrl });
         setShowOtp(true);
-        setError(result.message || 'Please set up 2FA');
+        setError('');
 
         // Generate QR Code
         try {

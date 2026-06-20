@@ -346,7 +346,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const response = await authApi.login(email, password, otp, secret);
 
-      // Handle 2FA Setup Response
+      // Handle 2FA Setup Response (before success check — setup returns success:false)
       if (response.setup_2fa) {
         return {
           success: false,

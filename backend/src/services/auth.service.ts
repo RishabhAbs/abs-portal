@@ -103,7 +103,7 @@ export class AuthService implements OnModuleInit {
         secret: secret,
         encoding: 'base32',
         token: otpCode,
-        window: 2 // Allow 1 step before/after for clock drift
+        window: 10
       });
 
       if (!isValid) {
@@ -111,10 +111,15 @@ export class AuthService implements OnModuleInit {
       }
     } else if (!skip2fa && (user.role?.toLowerCase() === 'admin' || user.role?.toLowerCase() === 'superadmin')) {
       // Force 2FA Setup for Admins if not enabled
-      if (otpCode && setupSecret) {
-        // Verify and Enable
+      if (otpCode) {
+        // Verify against the secret already saved in DB during setup initiation
+        const savedSecret = await this.usersService.getTwoFactorSecret(user.id);
+        if (!savedSecret) {
+          throw new UnauthorizedException('2FA setup error: please refresh and scan the QR code again');
+        }
+
         const isValid = speakeasy.totp.verify({
-          secret: setupSecret,
+          secret: savedSecret,
           encoding: 'base32',
           token: otpCode,
           window: 2
@@ -124,20 +129,20 @@ export class AuthService implements OnModuleInit {
           throw new UnauthorizedException('Invalid 2FA code for setup');
         }
 
-        // Save and Enable
-        await this.usersService.setTwoFactorSecret(user.id, setupSecret);
+        // Enable 2FA now that code is verified
         await this.usersService.enableTwoFactor(user.id);
 
         // Continue to login...
       } else {
-        // Trigger Setup Flow
-        const secret = this.generateTwoFactorSecret(user.email);
+        // Generate secret, save to DB immediately so it persists across page reloads
+        const secretData = this.generateTwoFactorSecret(user.email);
+        await this.usersService.setTwoFactorSecret(user.id, secretData.secret);
         return {
           success: false,
           setup_2fa: true,
           message: 'Admin 2FA Setup Required',
-          secret: secret.secret,
-          otpauthUrl: secret.otpauthUrl
+          secret: secretData.secret,
+          otpauthUrl: secretData.otpauthUrl
         };
       }
     }
