@@ -235,31 +235,6 @@ export default function StockSummary() {
         </div>
       )}
 
-      {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
-      <div className="hidden sm:block flex-none bg-white border-b border-slate-200 overflow-x-auto print:hidden">
-        <div className="flex divide-x divide-slate-200 min-w-max">
-          <div className="px-4 py-2.5 flex-shrink-0">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Opening</div>
-            <div className="text-[13px] font-bold text-slate-600 tabular-nums mt-0.5">{fmt(totals.opening_value)}</div>
-          </div>
-          <div className="px-4 py-2.5 flex-shrink-0">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Inward</div>
-            <div className="text-[13px] font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(totals.inward_value)}</div>
-          </div>
-          <div className="px-4 py-2.5 flex-shrink-0">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Outward</div>
-            <div className="text-[13px] font-bold text-red-600 tabular-nums mt-0.5">{fmt(totals.outward_value)}</div>
-          </div>
-          <div className="px-4 py-2.5 flex-shrink-0">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Closing</div>
-            <div className={`text-[13px] font-bold tabular-nums mt-0.5 ${totals.closing_value < 0 ? 'text-red-600' : 'text-blue-700'}`}>{fmt(totals.closing_value)}</div>
-          </div>
-          <div className="px-4 py-2.5 flex-shrink-0">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Items</div>
-            <div className="text-[13px] font-bold text-slate-700 tabular-nums mt-0.5">{totalRows}</div>
-          </div>
-        </div>
-      </div>
 
       {/* ── Mobile flat list (hidden on sm+) ── */}
       <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
