@@ -1276,6 +1276,23 @@ export class VouchersService implements OnModuleInit {
                            AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
                              OR LOWER(COALESCE(p.name, vt.name)) LIKE '%credit note%')
                           THEN ABS(ie.amount) ELSE 0 END)        AS sales_return_value,
+                    -- Fallback counts for service items where qty=0 but value exists
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
+                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
+                           AND ABS(ie.qty) = 0 AND ABS(ie.amount) > 0
+                           AND (COALESCE(p.name, vt.name) IS NULL
+                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'))
+                          THEN 1 ELSE 0 END)                     AS purchase_count,
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
+                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
+                           AND ABS(ie.qty) = 0 AND ABS(ie.amount) > 0
+                           AND (COALESCE(p.name, vt.name) IS NULL
+                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'))
+                          THEN 1 ELSE 0 END)                     AS sales_count,
                     MAX(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
                                            IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
                              THEN ABS(ie.rate) END)              AS last_in_rate
@@ -1310,14 +1327,16 @@ export class VouchersService implements OnModuleInit {
                 const m = moveByItem.get(Number(i.id)) || {};
                 const openingQty        = Number(i.opening_qty)          || 0;
                 const openingValue      = Number(i.opening_value)        || 0;
-                const purchaseQty       = Number(m.purchase_qty)         || 0;
                 const purchaseValue     = Number(m.purchase_value)       || 0;
-                const purchaseReturnQty = Number(m.purchase_return_qty)  || 0;
                 const purchaseReturnVal = Number(m.purchase_return_value) || 0;
-                const salesQty          = Number(m.sales_qty)            || 0;
                 const salesValue        = Number(m.sales_value)          || 0;
-                const salesReturnQty    = Number(m.sales_return_qty)     || 0;
                 const salesReturnVal    = Number(m.sales_return_value)   || 0;
+                // When qty=0 but value exists (service items from Tally), use
+                // purchase_count / sales_count as fallback qty (number of line items)
+                const purchaseQty       = Number(m.purchase_qty)  || (purchaseValue > 0 ? Number(m.purchase_count)  || 0 : 0);
+                const purchaseReturnQty = Number(m.purchase_return_qty) || 0;
+                const salesQty          = Number(m.sales_qty)     || (salesValue    > 0 ? Number(m.sales_count)     || 0 : 0);
+                const salesReturnQty    = Number(m.sales_return_qty)    || 0;
                 // Net inward = Purchase − Purchase Return
                 const inwardQty    = purchaseQty    - purchaseReturnQty;
                 const inwardValue  = purchaseValue  - purchaseReturnVal;
