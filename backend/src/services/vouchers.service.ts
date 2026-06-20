@@ -1208,94 +1208,88 @@ export class VouchersService implements OnModuleInit {
         if (opts.dateTo)   { where.push('v.vch_date <= ?'); params.push(opts.dateTo); }
         const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-        // Resolve effective direction per voucher row:
-        //   effective_dp = deemed_positive from parent vchtype, then vchtype itself,
-        //   then fall back to qty sign (positive qty = inward/purchase = 'NO',
-        //   negative qty = outward/sales = 'YES') for Tally-imported vouchers
-        //   that have no vchtype or deemed_positive set.
-        // is_return = name contains "return", "debit note", or "credit note".
+        // Classification strategy (in priority order):
+        //   1. If vchtype name is "Credit Note" → sales return (reduces outward)
+        //   2. If vchtype name is "Debit Note"  → purchase return (reduces inward)
+        //   3. If vchtype name contains "return" → use qty sign to pick inward/outward return
+        //   4. qty > 0  → inward (purchase)
+        //   4. qty < 0  → outward (sales)
+        //   5. qty = 0, amount > 0 → inward (purchase receipt with no qty e.g. service)
+        //   5. qty = 0, amount < 0 → outward (sales invoice with no qty)
         const movement = await this.db.query<any>(
             `SELECT ie.item_id,
-                    -- Purchase (inward, excluding purchase returns)
+                    -- resolved type name (parent beats child)
+                    -- credit note → sales return; debit note → purchase return;
+                    -- *return* in name → return of same direction as qty sign;
+                    -- otherwise qty sign drives inward vs outward.
+
+                    -- PURCHASE (inward, not a return)
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'))
-                          THEN ABS(ie.qty) ELSE 0 END)           AS purchase_qty,
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND COALESCE(ie.qty, ie.amount) >= 0
+                          THEN ABS(ie.qty) ELSE 0 END)            AS purchase_qty,
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'))
-                          THEN ABS(ie.amount) ELSE 0 END)        AS purchase_value,
-                    -- Purchase Return (reduces inward)
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND COALESCE(ie.qty, ie.amount) >= 0
+                          THEN ABS(ie.amount) ELSE 0 END)         AS purchase_value,
+
+                    -- PURCHASE RETURN / DEBIT NOTE (reduces inward)
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                           AND COALESCE(p.name, vt.name) IS NOT NULL
-                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
-                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%debit note%')
-                          THEN ABS(ie.qty) ELSE 0 END)           AS purchase_return_qty,
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%debit note%'
+                            OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                AND COALESCE(ie.qty, ie.amount) >= 0)
+                          THEN ABS(ie.qty) ELSE 0 END)            AS purchase_return_qty,
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                           AND COALESCE(p.name, vt.name) IS NOT NULL
-                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
-                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%debit note%')
-                          THEN ABS(ie.amount) ELSE 0 END)        AS purchase_return_value,
-                    -- Sales (outward, excluding sales returns)
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%debit note%'
+                            OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                AND COALESCE(ie.qty, ie.amount) >= 0)
+                          THEN ABS(ie.amount) ELSE 0 END)         AS purchase_return_value,
+
+                    -- SALES (outward, not a return)
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'))
-                          THEN ABS(ie.qty) ELSE 0 END)           AS sales_qty,
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND COALESCE(ie.qty, ie.amount) < 0
+                          THEN ABS(ie.qty) ELSE 0 END)            AS sales_qty,
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'))
-                          THEN ABS(ie.amount) ELSE 0 END)        AS sales_value,
-                    -- Sales Return (reduces outward)
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND COALESCE(ie.qty, ie.amount) < 0
+                          THEN ABS(ie.amount) ELSE 0 END)         AS sales_value,
+
+                    -- SALES RETURN / CREDIT NOTE (reduces outward)
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
-                           AND COALESCE(p.name, vt.name) IS NOT NULL
-                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
-                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%credit note%')
-                          THEN ABS(ie.qty) ELSE 0 END)           AS sales_return_qty,
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%credit note%'
+                            OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                AND COALESCE(ie.qty, ie.amount) < 0)
+                          THEN ABS(ie.qty) ELSE 0 END)            AS sales_return_qty,
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
-                           AND COALESCE(p.name, vt.name) IS NOT NULL
-                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
-                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%credit note%')
-                          THEN ABS(ie.amount) ELSE 0 END)        AS sales_return_value,
-                    -- Fallback counts for service items where qty=0 but value exists
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%credit note%'
+                            OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                AND COALESCE(ie.qty, ie.amount) < 0)
+                          THEN ABS(ie.amount) ELSE 0 END)         AS sales_return_value,
+
+                    -- Fallback count: service items where qty=0 but amount exists
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                           AND ABS(ie.qty) = 0 AND ABS(ie.amount) > 0
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'))
-                          THEN 1 ELSE 0 END)                     AS purchase_count,
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND ie.qty = 0 AND ie.amount > 0
+                          THEN 1 ELSE 0 END)                      AS purchase_count,
                     SUM(CASE
-                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                        IF(ie.qty >= 0, 'NO', 'YES')) = 'YES'
-                           AND ABS(ie.qty) = 0 AND ABS(ie.amount) > 0
-                           AND (COALESCE(p.name, vt.name) IS NULL
-                             OR (LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
-                            AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'))
-                          THEN 1 ELSE 0 END)                     AS sales_count,
-                    MAX(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive,
-                                           IF(ie.qty >= 0, 'NO', 'YES')) = 'NO'
-                             THEN ABS(ie.rate) END)              AS last_in_rate
+                          WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                           AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                           AND ie.qty = 0 AND ie.amount < 0
+                          THEN 1 ELSE 0 END)                      AS sales_count,
+
+                    MAX(CASE WHEN COALESCE(ie.qty, ie.amount) >= 0 THEN ABS(ie.rate) END) AS last_in_rate
              FROM inventory_entries ie
              INNER JOIN ledger_entries le ON ie.led_id = le.id
              INNER JOIN vch_details v ON le.vch_id = v.id
