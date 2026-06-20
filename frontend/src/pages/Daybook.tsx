@@ -425,7 +425,6 @@ export default function Daybook() {
               <th className={`${headCell} text-right w-32`}>
                 <div className={headBtn + ' justify-end'} onClick={() => toggleSort('cr_amount')}>Credit<SortIcon col="cr_amount" /></div>
               </th>
-              <th className={`${headCell} text-center w-20`}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -464,15 +463,6 @@ export default function Daybook() {
                     </td>
                     <td className={cellNum + ' text-slate-800 font-medium'}>
                       {Number(row.cr_amount) > 0 ? fmt(row.cr_amount) : <span className="text-slate-300">—</span>}
-                    </td>
-                    <td className={`${cell} text-center`}>
-                      {/* Single Open button — Vouchers page renders edit OR
-                          read-only based on the current user's permissions. */}
-                      <button onClick={() => openVoucher(row.id)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-full whitespace-nowrap transition-colors"
-                        title={canEditVoucher ? 'Open & edit' : 'Open (view only)'}>
-                        <ExternalLink size={12} /> Open
-                      </button>
                     </td>
                   </tr>
                 );
