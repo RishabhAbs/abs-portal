@@ -1196,10 +1196,12 @@ export class VouchersService implements OnModuleInit {
         dateTo?: string;
         search?: string;
     }) {
-        // Movement aggregated per item over the date window. Inward = qty
-        // received (Purchase/Credit Note); outward = qty issued (Sales/
-        // Debit Note). The CASE on deemed_positive matches the same rule
-        // the rest of the app uses for direction.
+        // Movement aggregated per item over the date window.
+        // Inward  = Purchase qty − Purchase Return qty
+        // Outward = Sales qty    − Sales Return qty
+        // A "return" vchtype is identified by its resolved name containing
+        // "return" OR being "debit note" (purchase return) / "credit note"
+        // (sales return). The parent name takes precedence when set.
         const where: string[] = [];
         const params: any[] = [];
         if (opts.dateFrom) { where.push('v.vch_date >= ?'); params.push(opts.dateFrom); }
@@ -1208,14 +1210,50 @@ export class VouchersService implements OnModuleInit {
 
         const movement = await this.db.query<any>(
             `SELECT ie.item_id,
-                    SUM(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
-                             THEN ABS(ie.qty) ELSE 0 END)        AS inward_qty,
-                    SUM(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
-                             THEN ABS(ie.amount) ELSE 0 END)     AS inward_value,
-                    SUM(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
-                             THEN ABS(ie.qty) ELSE 0 END)        AS outward_qty,
-                    SUM(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
-                             THEN ABS(ie.amount) ELSE 0 END)     AS outward_value,
+                    -- Purchase (inward, excluding purchase returns)
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'
+                          THEN ABS(ie.qty) ELSE 0 END)           AS purchase_qty,
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%debit note%'
+                          THEN ABS(ie.amount) ELSE 0 END)        AS purchase_value,
+                    -- Purchase Return (reduces inward)
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
+                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
+                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%debit note%')
+                          THEN ABS(ie.qty) ELSE 0 END)           AS purchase_return_qty,
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
+                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
+                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%debit note%')
+                          THEN ABS(ie.amount) ELSE 0 END)        AS purchase_return_value,
+                    -- Sales (outward, excluding sales returns)
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'
+                          THEN ABS(ie.qty) ELSE 0 END)           AS sales_qty,
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%return%'
+                           AND LOWER(COALESCE(p.name, vt.name)) NOT LIKE '%credit note%'
+                          THEN ABS(ie.amount) ELSE 0 END)        AS sales_value,
+                    -- Sales Return (reduces outward)
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
+                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
+                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%credit note%')
+                          THEN ABS(ie.qty) ELSE 0 END)           AS sales_return_qty,
+                    SUM(CASE
+                          WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'YES'
+                           AND (LOWER(COALESCE(p.name, vt.name)) LIKE '%return%'
+                             OR LOWER(COALESCE(p.name, vt.name)) LIKE '%credit note%')
+                          THEN ABS(ie.amount) ELSE 0 END)        AS sales_return_value,
                     MAX(CASE WHEN COALESCE(p.deemed_positive, vt.deemed_positive) = 'NO'
                              THEN ie.rate END)                   AS last_in_rate
              FROM inventory_entries ie
@@ -1247,12 +1285,22 @@ export class VouchersService implements OnModuleInit {
         const data = items
             .map((i: any) => {
                 const m = moveByItem.get(Number(i.id)) || {};
-                const openingQty   = Number(i.opening_qty)   || 0;
-                const openingValue = Number(i.opening_value) || 0;
-                const inwardQty    = Number(m.inward_qty)    || 0;
-                const inwardValue  = Number(m.inward_value)  || 0;
-                const outwardQty   = Number(m.outward_qty)   || 0;
-                const outwardValue = Number(m.outward_value) || 0;
+                const openingQty        = Number(i.opening_qty)          || 0;
+                const openingValue      = Number(i.opening_value)        || 0;
+                const purchaseQty       = Number(m.purchase_qty)         || 0;
+                const purchaseValue     = Number(m.purchase_value)       || 0;
+                const purchaseReturnQty = Number(m.purchase_return_qty)  || 0;
+                const purchaseReturnVal = Number(m.purchase_return_value) || 0;
+                const salesQty          = Number(m.sales_qty)            || 0;
+                const salesValue        = Number(m.sales_value)          || 0;
+                const salesReturnQty    = Number(m.sales_return_qty)     || 0;
+                const salesReturnVal    = Number(m.sales_return_value)   || 0;
+                // Net inward = Purchase − Purchase Return
+                const inwardQty    = purchaseQty    - purchaseReturnQty;
+                const inwardValue  = purchaseValue  - purchaseReturnVal;
+                // Net outward = Sales − Sales Return
+                const outwardQty   = salesQty       - salesReturnQty;
+                const outwardValue = salesValue      - salesReturnVal;
                 const closingQty   = openingQty + inwardQty - outwardQty;
                 // Pick the most recent inward rate, then opening rate, then
                 // average outward rate as a fallback for valuation.
