@@ -701,6 +701,8 @@ function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: (
               <button onClick={e => { e.stopPropagation(); setDate(todayStr); }}
                 className="text-[10px] text-green-600 underline">Today</button>
             )}
+            <button onClick={e => { e.stopPropagation(); setLoaded(false); }}
+              className="ml-auto text-[10px] text-gray-400 hover:text-gray-600 underline">Refresh</button>
           </div>
           <div className="overflow-x-auto">
           {!loaded ? (
