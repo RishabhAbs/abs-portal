@@ -36,6 +36,25 @@ export class JwtAuthGuard implements CanActivate {
         throw new UnauthorizedException('Invalid token payload');
       }
 
+      // Owner synthetic user — bypass DB lookup and session check
+      if (userId === 'owner-0') {
+        request.user = {
+          id: 'owner-0',
+          email: payload.email,
+          name: payload.name || 'Rishabh Bothra',
+          role: 'superadmin',
+          status: 'active',
+          is_two_fa_enabled: false,
+          permissions: { users: { view: true, create: true, edit: true, delete: true } },
+          column_permissions: {},
+          adminId: payload.adminId,
+          adminName: payload.adminName,
+          sessionId: payload.sessionId,
+          deviceType: payload.deviceType,
+        };
+        return true;
+      }
+
       // Fetch user to check status
       const user = await this.usersService.findById(userId);
 

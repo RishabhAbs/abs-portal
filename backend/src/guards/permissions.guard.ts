@@ -23,8 +23,9 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    // Admin bypass
-    if (user.role?.toLowerCase() === 'admin') {
+    // Admin / superadmin bypass
+    const role = user.role?.toLowerCase();
+    if (role === 'admin' || role === 'superadmin') {
       return true;
     }
 
