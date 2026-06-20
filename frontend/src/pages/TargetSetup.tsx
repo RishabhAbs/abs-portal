@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { targetsApi, usersApi } from '../services/api';
+import { targetsApi, usersApi, itemsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
 import { CheckCircle, Clock, Edit3, Save, X, ChevronDown, Hash, IndianRupee } from 'lucide-react';
@@ -93,16 +93,39 @@ const TargetSetup: React.FC = () => {
   const [grid, setGrid] = useState<Record<string, Record<string, number>>>(() => rowsToGrid([]));
   // rowMeta[month] = { id, status }
   const [rowMeta, setRowMeta] = useState<Record<string, any>>({});
-  // unitTypes[typeKey] = 'qty' | 'amount'
+  // unitTypes[typeKey] = 'qty' | 'amount' — driven by item_categories.target_unit
   const [unitTypes, setUnitTypes] = useState<Record<string, UnitType>>(() =>
     Object.fromEntries(TYPES.map(t => [t.key, 'qty' as UnitType]))
   );
+  // category-defined units (source of truth from item_categories)
+  const [categoryUnits, setCategoryUnits] = useState<Record<string, UnitType>>({});
 
   // Admin: user selector
   useEffect(() => {
     if (admin) {
       usersApi.getBasic().then(res => setUsers(Array.isArray(res) ? res : res?.data || [])).catch(() => {});
     }
+  }, []);
+
+  // Load item categories once to derive unit type per target type
+  useEffect(() => {
+    itemsApi.getCategories().then(res => {
+      if (!res.success) return;
+      const cats: any[] = res.data || [];
+      const derived: Record<string, UnitType> = {};
+      for (const t of TYPES) {
+        // Match category by label or key (case-insensitive, ignore spaces/underscores)
+        const normalize = (s: string) => s.toLowerCase().replace(/[\s_]/g, '');
+        const match = cats.find(c =>
+          normalize(c.name) === normalize(t.label) ||
+          normalize(c.name) === normalize(t.key)
+        );
+        if (match) derived[t.key] = match.target_unit === 'amount' ? 'amount' : 'qty';
+      }
+      setCategoryUnits(derived);
+      // Apply category units as baseline for unitTypes
+      setUnitTypes(prev => ({ ...prev, ...derived }));
+    }).catch(() => {});
   }, []);
 
   // Fetch targets + unit types when fy or selectedUser changes
@@ -122,10 +145,10 @@ const TargetSetup: React.FC = () => {
       for (const r of data) meta[r.month] = { id: r.id, status: r.status };
       setRowMeta(meta);
 
-      // Merge fetched unit types with defaults (all 'qty')
+      // Category-defined units take precedence; fall back to saved, then 'qty'
       const fetched: Record<string, string> = unitRes?.data || {};
       setUnitTypes(Object.fromEntries(
-        TYPES.map(t => [t.key, (fetched[t.key] as UnitType) || 'qty'])
+        TYPES.map(t => [t.key, categoryUnits[t.key] || (fetched[t.key] as UnitType) || 'qty'])
       ));
     } catch {
       setRows([]); setGrid(rowsToGrid([]));
@@ -138,10 +161,6 @@ const TargetSetup: React.FC = () => {
   const handleCell = (typeKey: string, month: string, val: string) => {
     const n = parseInt(val) || 0;
     setGrid(prev => ({ ...prev, [typeKey]: { ...prev[typeKey], [month]: n } }));
-  };
-
-  const toggleUnit = (typeKey: string) => {
-    setUnitTypes(prev => ({ ...prev, [typeKey]: prev[typeKey] === 'qty' ? 'amount' : 'qty' }));
   };
 
   // Row totals (per type, across all months)
@@ -276,7 +295,7 @@ const TargetSetup: React.FC = () => {
       {/* Unit type legend */}
       {editMode && (!admin || selectedUser) && (
         <div className="bg-blue-50 border-b border-blue-100 px-4 sm:px-6 py-2 text-xs text-blue-600 flex items-center gap-3">
-          <span className="font-semibold">Click the type label to toggle unit:</span>
+          <span className="font-semibold">Unit per type is set by Item Category:</span>
           <span className="flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-300 rounded-full font-medium text-gray-600">
             <Hash className="h-3 w-3" /> Qty — count (e.g. 15 sales)
           </span>
@@ -297,7 +316,7 @@ const TargetSetup: React.FC = () => {
                 <tr className="bg-gray-50 border-b border-gray-200">
                   <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wide sticky left-0 bg-gray-50 border-r border-gray-200 w-32">
                     Type
-                    {editMode && <div className="text-[10px] font-normal text-gray-400 normal-case mt-0.5">tap to toggle unit</div>}
+                    {editMode && <div className="text-[10px] font-normal text-gray-400 normal-case mt-0.5">unit from category</div>}
                   </th>
                   {MONTHS.map(m => (
                     <th key={m} className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase tracking-wide min-w-[72px]">{m.slice(0,3)}</th>
@@ -311,36 +330,21 @@ const TargetSetup: React.FC = () => {
                   const isAmount = unit === 'amount';
                   return (
                     <tr key={t.key} className={ti % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
-                      {/* Type label cell — clickable toggle in edit mode */}
+                      {/* Type label cell — unit badge (read-only, set by item category) */}
                       <td className={`px-3 py-2 sticky left-0 border-r border-gray-200 ${ti % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                        {editMode ? (
-                          <button
-                            onClick={() => toggleUnit(t.key)}
-                            title={`Currently: ${isAmount ? 'Amount (₹)' : 'Quantity (#)'}. Click to toggle.`}
-                            className={`w-full flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border transition-colors ${
-                              isAmount
-                                ? 'border-violet-300 bg-violet-50 text-violet-700'
-                                : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-blue-300 hover:bg-blue-50'
-                            }`}
-                          >
-                            <span className="font-semibold text-sm">{t.label}</span>
-                            <span className={`flex items-center gap-0.5 text-[10px] font-bold rounded px-1 py-0.5 ${
-                              isAmount ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-500'
-                            }`}>
-                              {isAmount ? <IndianRupee className="h-2.5 w-2.5" /> : <Hash className="h-2.5 w-2.5" />}
-                              {isAmount ? 'Amt' : 'Qty'}
-                            </span>
-                          </button>
-                        ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-gray-800">{t.label}</span>
-                            <span className={`text-[10px] font-bold px-1 py-0.5 rounded ${
-                              isAmount ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-400'
-                            }`}>
-                              {isAmount ? '₹' : '#'}
-                            </span>
-                          </div>
-                        )}
+                        <div className={`flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border ${
+                          editMode
+                            ? isAmount ? 'border-violet-200 bg-violet-50' : 'border-blue-100 bg-blue-50/40'
+                            : 'border-transparent'
+                        }`}>
+                          <span className="font-semibold text-gray-800 text-sm">{t.label}</span>
+                          <span className={`flex items-center gap-0.5 text-[10px] font-bold rounded px-1 py-0.5 ${
+                            isAmount ? 'bg-violet-100 text-violet-600' : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {isAmount ? <IndianRupee className="h-2.5 w-2.5" /> : <Hash className="h-2.5 w-2.5" />}
+                            {isAmount ? 'Amt' : 'Qty'}
+                          </span>
+                        </div>
                       </td>
 
                       {MONTHS.map(month => (

@@ -67,6 +67,11 @@ export class ItemsService implements OnModuleInit {
         // Feature 1: item_group_id column
         await this.db.execute(`ALTER TABLE items ADD COLUMN item_group_id INT NULL`).catch(() => {});
 
+        // Feature: target_unit on item_categories (qty / amount)
+        await this.db.execute(
+            `ALTER TABLE item_categories ADD COLUMN target_unit ENUM('qty','amount') NOT NULL DEFAULT 'qty'`
+        ).catch(() => {});
+
         // Feature 3: opening balance columns
         await this.db.execute(`ALTER TABLE items ADD COLUMN opening_qty DECIMAL(10,3) DEFAULT 0`).catch(() => {});
         await this.db.execute(`ALTER TABLE items ADD COLUMN opening_rate DECIMAL(10,2) DEFAULT 0`).catch(() => {});
@@ -115,25 +120,27 @@ export class ItemsService implements OnModuleInit {
     // ── Item Categories ──
     async getCategories(): Promise<any[]> {
         return this.db.query<any>(
-            `SELECT c.id, c.name, c.parent_id, p.name AS parent_name
+            `SELECT c.id, c.name, c.parent_id, c.target_unit, p.name AS parent_name
              FROM item_categories c
              LEFT JOIN item_categories p ON p.id = c.parent_id
              ORDER BY c.name`
         );
     }
 
-    async createCategory(name: string, parentId?: number | null): Promise<any> {
+    async createCategory(name: string, parentId?: number | null, targetUnit?: string): Promise<any> {
+        const unit = targetUnit === 'amount' ? 'amount' : 'qty';
         const result = await this.db.execute(
-            'INSERT INTO item_categories (name, parent_id) VALUES (?, ?)',
-            [name, parentId || null]
+            'INSERT INTO item_categories (name, parent_id, target_unit) VALUES (?, ?, ?)',
+            [name, parentId || null, unit]
         );
-        return { id: result.insertId, name, parent_id: parentId || null };
+        return { id: result.insertId, name, parent_id: parentId || null, target_unit: unit };
     }
 
-    async updateCategory(id: number, name: string, parentId?: number | null): Promise<void> {
+    async updateCategory(id: number, name: string, parentId?: number | null, targetUnit?: string): Promise<void> {
+        const unit = targetUnit === 'amount' ? 'amount' : 'qty';
         await this.db.execute(
-            'UPDATE item_categories SET name=?, parent_id=?, updated_at=NOW() WHERE id=?',
-            [name, parentId || null, id]
+            'UPDATE item_categories SET name=?, parent_id=?, target_unit=?, updated_at=NOW() WHERE id=?',
+            [name, parentId || null, unit, id]
         );
     }
 

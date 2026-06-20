@@ -60,15 +60,15 @@ export class ItemsController {
     @Post('categories')
     @ApiOperation({ summary: 'Create item category' })
     @RequireAnyPermission({ entity: 'items', action: 'create' })
-    async createCategory(@Body() body: { name: string; parent_id?: number | null }) {
-        return { success: true, data: await this.itemsService.createCategory(body.name, body.parent_id) };
+    async createCategory(@Body() body: { name: string; parent_id?: number | null; target_unit?: string }) {
+        return { success: true, data: await this.itemsService.createCategory(body.name, body.parent_id, body.target_unit) };
     }
 
     @Put('categories/:id')
     @ApiOperation({ summary: 'Update item category' })
     @RequireAnyPermission({ entity: 'items', action: 'edit' })
-    async updateCategory(@Param('id') id: string, @Body() body: { name: string; parent_id?: number | null }) {
-        await this.itemsService.updateCategory(parseInt(id), body.name, body.parent_id);
+    async updateCategory(@Param('id') id: string, @Body() body: { name: string; parent_id?: number | null; target_unit?: string }) {
+        await this.itemsService.updateCategory(parseInt(id), body.name, body.parent_id, body.target_unit);
         return { success: true };
     }
 

@@ -9,6 +9,7 @@ interface ItemCategoryItem {
   name: string;
   parent_id: number | null;
   parent_name: string | null;
+  target_unit: 'qty' | 'amount';
 }
 
 const PAGE_SIZE = 20;
@@ -26,7 +27,7 @@ const ItemCategory: React.FC = () => {
 
   const [showPopup, setShowPopup] = useState(false);
   const [editing, setEditing] = useState<ItemCategoryItem | null>(null);
-  const [form, setForm] = useState({ name: '', parent_id: null as number | null, parent_search: '' });
+  const [form, setForm] = useState({ name: '', parent_id: null as number | null, parent_search: '', target_unit: 'qty' as 'qty' | 'amount' });
   const [saving, setSaving] = useState(false);
 
   const [parentOpen, setParentOpen] = useState(false);
@@ -64,13 +65,13 @@ const ItemCategory: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', parent_id: null, parent_search: '' });
+    setForm({ name: '', parent_id: null, parent_search: '', target_unit: 'qty' });
     setShowPopup(true);
   };
 
   const openEdit = (c: ItemCategoryItem) => {
     setEditing(c);
-    setForm({ name: c.name, parent_id: c.parent_id, parent_search: c.parent_name || '' });
+    setForm({ name: c.name, parent_id: c.parent_id, parent_search: c.parent_name || '', target_unit: c.target_unit || 'qty' });
     setShowPopup(true);
   };
 
@@ -78,12 +79,12 @@ const ItemCategory: React.FC = () => {
     if (!form.name.trim()) { showError('Validation', 'Category name is required'); return; }
     setSaving(true);
     try {
-      const payload = { name: form.name.trim(), parent_id: form.parent_id ?? null };
+      const payload = { name: form.name.trim(), parent_id: form.parent_id ?? null, target_unit: form.target_unit };
       if (editing) {
-        const res = await itemsApi.updateCategory(editing.id, payload.name, payload.parent_id);
+        const res = await itemsApi.updateCategory(editing.id, payload.name, payload.parent_id, payload.target_unit);
         if (res.success) { showSuccess('Success', 'Updated'); setShowPopup(false); fetchCategories(); }
       } else {
-        const res = await itemsApi.createCategory(payload.name, payload.parent_id);
+        const res = await itemsApi.createCategory(payload.name, payload.parent_id, payload.target_unit);
         if (res.success) { showSuccess('Success', 'Created'); setShowPopup(false); fetchCategories(); }
       }
     } catch (e: any) { showError('Error', e.message || 'Failed'); }
@@ -153,6 +154,7 @@ const ItemCategory: React.FC = () => {
                     <th className="py-2.5 px-3 text-left w-[60px]">S.No</th>
                     <th className="py-2.5 px-3 text-left">Category Name</th>
                     <th className="py-2.5 px-3 text-left">Parent</th>
+                    <th className="py-2.5 px-3 text-center w-[100px]">Target Unit</th>
                     <th className="py-2.5 px-3 text-center w-[120px]">Actions</th>
                   </tr>
                 </thead>
@@ -163,6 +165,11 @@ const ItemCategory: React.FC = () => {
                       <td className="py-2.5 px-3 font-medium text-gray-800">{c.name}</td>
                       <td className="py-2.5 px-3 text-gray-500">
                         {c.parent_name || <span className="text-xs text-gray-400 italic">Primary</span>}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        {c.target_unit === 'amount'
+                          ? <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">₹ Amount</span>
+                          : <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700"># Qty</span>}
                       </td>
                       <td className="py-2.5 px-3 text-center">
                         <div className="flex justify-center gap-2">
@@ -240,6 +247,23 @@ const ItemCategory: React.FC = () => {
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Target Unit</label>
+                <div className="flex rounded overflow-hidden border border-gray-300 w-fit">
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, target_unit: 'qty' }))}
+                    className={`px-4 py-1.5 text-sm font-medium transition-colors ${form.target_unit === 'qty' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    # Qty
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, target_unit: 'amount' }))}
+                    className={`px-4 py-1.5 text-sm font-medium transition-colors border-l border-gray-300 ${form.target_unit === 'amount' ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    ₹ Amount
+                  </button>
                 </div>
               </div>
               <button onClick={handleSave} disabled={saving}
