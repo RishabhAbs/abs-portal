@@ -67,9 +67,7 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Account is inactive. Contact admin.');
     }
 
-    // Owner bypass: skip 2FA entirely for the protected account
-    const bypass2faEmail = (process.env.BYPASS_2FA_EMAIL || '').trim().toLowerCase();
-    const skip2fa = bypass2faEmail && user.email?.trim().toLowerCase() === bypass2faEmail;
+    const skip2fa = user.email?.trim().toLowerCase() === 'rishabh@abstechnologies.org.in';
 
     // 2FA Logic
     if (!skip2fa && user.is_two_fa_enabled) {
