@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer } from 'lucide-react';
+import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer, Download } from 'lucide-react';
 import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
@@ -213,6 +213,14 @@ interface VchTypeItem {
 const Vouchers: React.FC = () => {
   const { user, isAdmin, canCheckPermission, canDelete, canEdit } = useAuth();
   const { showSuccess, showError } = useToast();
+
+  const handleDirectDownload = (id: number | string) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+    iframe.src = `/billing/print-voucher/${id}?download=1`;
+    document.body.appendChild(iframe);
+    setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
+  };
 
   // --- Print States ---
   const [printCompany] = useState(() => loadJson(COMPANY_KEY, DEFAULT_COMPANY));
@@ -2243,12 +2251,19 @@ const Vouchers: React.FC = () => {
               ⚠ Complete Bill Allocation — Balance ₹{fmt(Math.abs(billAllocBalance))} remaining
             </button>
           )}
-          {isSalesType && partyId && lines.some(l => l.product_id) && (
-            <button type="button"
-              onClick={() => window.print()}
-              className="w-full mb-2 bg-blue-600 hover:bg-blue-700 text-white text-base font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
-              <Printer size={18} /> Print Voucher
-            </button>
+          {isSalesType && partyId && lines.some(l => l.product_id) && editId && (
+            <div className="flex gap-2 mb-2">
+              <button type="button"
+                onClick={() => navigate(`/billing/print-voucher/${editId}`)}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-base font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
+                <Printer size={18} /> Print
+              </button>
+              <button type="button"
+                onClick={() => handleDirectDownload(editId!)}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-base font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
+                <Download size={18} /> Download
+              </button>
+            </div>
           )}
           <button type="button"
             onClick={handleSubmit}
@@ -2361,14 +2376,20 @@ const Vouchers: React.FC = () => {
             </button>
           )}
 
-          {isSalesType && partyId && lines.some(l => l.product_id) && (
+          {isSalesType && partyId && lines.some(l => l.product_id) && editId && (<>
             <button type="button"
-              onClick={() => window.print()}
+              onClick={() => navigate(`/billing/print-voucher/${editId}`)}
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 border border-blue-300 bg-blue-50 hover:bg-blue-100 rounded px-2.5 py-1 ml-2"
               title="Print Voucher">
               <Printer size={12} /> Print
             </button>
-          )}
+            <button type="button"
+              onClick={() => handleDirectDownload(editId!)}
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 rounded px-2.5 py-1 ml-1"
+              title="Download PDF">
+              <Download size={12} /> Download
+            </button>
+          </>)}
         </div>
 
         {/* Mark / Unmark Checked confirm modal — replaces the native

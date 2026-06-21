@@ -77,11 +77,16 @@ const Dashboard: React.FC = () => {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [filteredUserPerf, setFilteredUserPerf] = useState<any>(null);
 
-  // Collapsible sections (all collapsed by default on mobile)
-  const [secCompany,    setSecCompany]    = useState(false);
-  const [secPending,    setSecPending]    = useState(false);
-  const [secOps,        setSecOps]        = useState(false);
-  const [secTeam,       setSecTeam]       = useState(false);
+  // Mobile tab switcher — only active on < lg screens
+  const [mobileTab, setMobileTab] = useState<'company' | 'customer' | 'pending' | 'team'>('company');
+
+
+  // Collapsible sections — expanded by default on desktop, collapsed on mobile
+  const isDesktop = () => window.innerWidth >= 1024;
+  const [secCompany,    setSecCompany]    = useState(() => isDesktop());
+  const [secPending,    setSecPending]    = useState(() => isDesktop());
+  const [secOps,        setSecOps]        = useState(() => isDesktop());
+  const [secTeam,       setSecTeam]       = useState(() => isDesktop());
 
   // Pending by user (admin only)
   const [pendingUsers, setPendingUsers] = useState<any[]>([]);
@@ -333,15 +338,39 @@ const Dashboard: React.FC = () => {
     // comfortable max-w-5xl reading width. Page padding shrinks at lg+.
     <div className="space-y-3 max-w-5xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-3 pt-3 pb-10">
 
+      {/* Mobile tab bar — hidden on desktop */}
+      {admin && (
+        <div className="flex lg:hidden bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          {([
+            { key: 'company',  label: 'Company' },
+            { key: 'customer', label: 'Customer' },
+            { key: 'pending',  label: 'Pending' },
+            { key: 'team',     label: 'Team' },
+          ] as const).map(tab => (
+            <button key={tab.key} onClick={() => setMobileTab(tab.key)}
+              className={`flex-1 py-2 text-xs font-semibold transition-colors border-b-2 ${
+                mobileTab === tab.key
+                  ? 'border-violet-600 text-violet-700 bg-violet-50'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Three-column dashboard from lg+ (1024 px) so 1366×768 / 1440×900
             laptops get the dense view too. Below lg everything stacks.
             `items-start` keeps each column anchored to the top regardless
             of how tall its siblings grow. */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 items-stretch">
+
+      {/* COL 1: Company Targets */}
+      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'company' ? 'block' : 'hidden') : 'block'} lg:block`}>
 
       {/* Targets — same layout for everyone. For admin, numbers are the sum across
           all users; for regular users, they're personal actuals vs personal plans. */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1">
         <div className="px-3 py-2 border-b border-gray-200 bg-violet-50/50 flex items-center justify-between gap-2 flex-wrap cursor-pointer select-none"
           onClick={() => setSecCompany(v => !v)}>
           <div className="flex items-center gap-1.5 flex-wrap min-w-0" onClick={e => e.stopPropagation()}>
@@ -372,7 +401,7 @@ const Dashboard: React.FC = () => {
             <ChevronRight className={`h-4 w-4 text-gray-400 transition-transform ${secCompany ? 'rotate-90' : ''}`} />
           </div>
         </div>
-        {secCompany && <div className="p-2.5 space-y-2">
+        {(secCompany || !isDesktop()) && <div className="p-2.5 space-y-2">
           {TARGET_CATEGORIES.map(cat => {
             const unit = unitsForUI[cat.key] || 'qty';
             const todayVal = getToday(cat.key);
@@ -420,8 +449,13 @@ const Dashboard: React.FC = () => {
         </div>}
       </div>
 
+      </div>{/* /col 1 */}
+
+      {/* COL 2: Pending Work + Customer Snapshot */}
+      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'pending' || mobileTab === 'customer' ? 'flex' : 'hidden') : 'flex'} lg:flex`}>
+
       {/* Pending Work Table — inline */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${admin ? (mobileTab === 'pending' ? 'block' : 'hidden') : 'block'} lg:block`}>
           <div className="px-3 py-2 border-b border-gray-200 bg-amber-50/50 flex items-center gap-1.5 cursor-pointer select-none"
             onClick={() => setSecPending(v => !v)}>
             <Clock className="h-3.5 w-3.5 text-amber-600" />
@@ -431,7 +465,7 @@ const Dashboard: React.FC = () => {
             )}
             <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secPending ? 'rotate-90' : ''}`} />
           </div>
-          {secPending && <div className="overflow-x-auto">
+          {(secPending || !isDesktop()) && <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr className="text-[10px] text-gray-500 uppercase">
@@ -539,23 +573,27 @@ const Dashboard: React.FC = () => {
 
       {/* Operations Snapshot — admin-only dense KPI grid. */}
       {admin && opsSnapshot && (
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${mobileTab === 'customer' ? 'block' : 'hidden'} lg:block`}>
           <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center gap-1.5 cursor-pointer select-none"
             onClick={() => setSecOps(v => !v)}>
             <Activity className="h-3.5 w-3.5 text-slate-600" />
-            <h3 className="font-semibold text-gray-900 text-sm">Operations Snapshot</h3>
+            <h3 className="font-semibold text-gray-900 text-sm">Customer Snapshot</h3>
             <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secOps ? 'rotate-90' : ''}`} />
           </div>
-          {secOps && <OperationsSnapshot data={opsSnapshot} headerless />}
+          {(secOps || !isDesktop()) && <OperationsSnapshot data={opsSnapshot} headerless />}
         </div>
       )}
 
-      </div>{/* /three-col grid */}
+      </div>{/* /col 2 */}
 
-      {/* Team Attendance — today's check-in/out for all users (admin only) */}
-      {admin && (
-        <TeamAttendance expanded={secTeam} onToggle={() => setSecTeam(v => !v)} />
-      )}
+      {/* COL 3: Team Attendance */}
+      <div className={`flex flex-col gap-2 min-h-0 ${mobileTab === 'team' ? 'flex' : 'hidden'} lg:flex`}>
+        {admin && (
+          <TeamAttendance expanded={secTeam || !isDesktop()} onToggle={() => setSecTeam(v => !v)} />
+        )}
+      </div>{/* /col 3 */}
+
+      </div>{/* /three-col grid */}
 
       {/* Floating Check-Out FAB — visible whenever the user is currently
           checked in. Tapping it opens a confirmation dialog so an accidental
@@ -671,7 +709,7 @@ function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: (
   const isToday    = date === todayStr;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col">
       <div className="px-3 py-2 border-b border-gray-200 bg-green-50/50 flex items-center gap-1.5 cursor-pointer select-none"
         onClick={onToggle}>
         <Users className="h-3.5 w-3.5 text-green-600" />
@@ -823,28 +861,45 @@ function OperationsSnapshot({ data, headerless }: { data: any; headerless?: bool
           })}
         </div>
 
-        {/* Body — toggles between the active expiry block (if a tab is
-            selected) and the three customer-movement cards (default). */}
-        {activeExpiry ? (
-          <div>
-            <button
-              onClick={() => setActiveExpiry(null)}
-              className="mb-1.5 inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded">
-              <X size={10} /> Close · show customers
-            </button>
-            <ExpiryBlock
-              title={`${TABS.find(t => t.key === activeExpiry)?.label} Expiry`}
-              seg={expiry[activeExpiry]}
-              accent={accentMap[activeExpiry]}
+        {/* Body — on desktop: toggle between expiry detail and movement.
+            On mobile (full-screen tab): always show everything. */}
+        <div className="block lg:hidden space-y-2">
+          {TABS.map(t => (
+            <ExpiryBlock key={t.key}
+              title={`${t.label} Expiry`}
+              seg={expiry[t.key]}
+              accent={accentMap[t.key]}
             />
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-1 gap-2">
+          ))}
+          <div className="space-y-2">
             <MovementBlock title="Onboarded — New (30D)"        grade={movement.onboard_new}        accent="emerald" />
             <MovementBlock title="Onboarded — From Other (30D)" grade={movement.onboard_from_other} accent="blue" />
             <MovementBlock title="Left Customer (30D)"          grade={movement.left}               accent="rose" />
           </div>
-        )}
+        </div>
+
+        <div className="hidden lg:block">
+          {activeExpiry ? (
+            <div>
+              <button
+                onClick={() => setActiveExpiry(null)}
+                className="mb-1.5 inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded">
+                <X size={10} /> Close · show customers
+              </button>
+              <ExpiryBlock
+                title={`${TABS.find(t => t.key === activeExpiry)?.label} Expiry`}
+                seg={expiry[activeExpiry]}
+                accent={accentMap[activeExpiry]}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2">
+              <MovementBlock title="Onboarded — New (30D)"        grade={movement.onboard_new}        accent="emerald" />
+              <MovementBlock title="Onboarded — From Other (30D)" grade={movement.onboard_from_other} accent="blue" />
+              <MovementBlock title="Left Customer (30D)"          grade={movement.left}               accent="rose" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

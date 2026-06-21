@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Search, X, Printer, Save, Plus, Trash2, ArrowLeft, Landmark, Pencil,
+  Search, X, Printer, Save, Plus, Trash2, ArrowLeft, Landmark, Pencil, Download,
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import { vouchersApi, customersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
+
+function useUpiQr(amount: number, vchNo: string, upiId: string, payeeName: string) {
+  const [dataUrl, setDataUrl] = useState('');
+  useEffect(() => {
+    if (!amount || !upiId) { setDataUrl(''); return; }
+    const remark = `PAYMENT-${vchNo} ${payeeName} Rs.${Math.round(amount)}`;
+    const upiStr = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(payeeName)}&am=${Math.round(amount)}&cu=INR&tn=${encodeURIComponent(remark)}`;
+    QRCode.toDataURL(upiStr, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
+      .then(url => setDataUrl(url))
+      .catch(() => setDataUrl(''));
+  }, [amount, vchNo, upiId, payeeName]);
+  return dataUrl;
+}
 
 const fmt = (n: any) =>
   Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -105,7 +119,7 @@ const DEFAULT_BANK: BankAccount = {
   ifsc:           'HDFC0004707',
   bank_name:      'HDFC Bank',
   branch:         'Paltan Bazar',
-  upi_id:         'abstechnologies@hdfcbank',
+  upi_id:         'Vyapar.176885158996@hdfcbank',
   qr_image:       '',
 };
 const DEFAULT_TERMS = [
@@ -127,7 +141,14 @@ function loadList<T>(key: string, fallback: T[]): T[] {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length) return parsed;
+      if (Array.isArray(parsed) && parsed.length) {
+        // Migrate old default bank UPI ID if still set to the old value
+        return parsed.map((item: any) =>
+          item.id === 'default' && item.upi_id === 'abstechnologies@hdfcbank'
+            ? { ...item, upi_id: 'Vyapar.176885158996@hdfcbank' }
+            : item
+        ) as T[];
+      }
     }
   } catch { /* ignore */ }
   return fallback;
@@ -136,6 +157,7 @@ function loadList<T>(key: string, fallback: T[]): T[] {
 export default function PrintVoucher() {
   const params = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { showError, showSuccess } = useToast();
 
   const [company, setCompany] = useState<CompanyInfo>(() => loadJson(COMPANY_KEY, DEFAULT_COMPANY));
@@ -377,6 +399,30 @@ export default function PrintVoucher() {
     window.print();
   };
 
+  const invoiceRef = useRef<HTMLDivElement>(null);
+  const handleDownload = async () => {
+    if (!voucher || !invoiceRef.current) return;
+    const html2pdf = (await import('html2pdf.js')).default;
+    const filename = `Invoice-${voucher.vch_no || voucher.id}.pdf`;
+    html2pdf()
+      .set({
+        margin: 10,
+        filename,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      })
+      .from(invoiceRef.current)
+      .save();
+  };
+
+  // Auto-download when navigated with ?download=1
+  useEffect(() => {
+    if (searchParams.get('download') === '1' && voucher && invoiceRef.current) {
+      handleDownload();
+    }
+  }, [voucher, searchParams]);
+
   // Bill-To customer search — typeahead that lets the user override the
   // voucher's party with any customer in the system. On pick we fetch the
   // full record and overwrite every Bill To field so the address / GST /
@@ -463,9 +509,9 @@ export default function PrintVoucher() {
   };
 
   return (
-    <div className="flex flex-col w-full bg-slate-100 fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto print:static print:h-auto" style={{ overscrollBehavior: "contain" }}>
+    <div className="flex flex-col w-full bg-slate-100 fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto print:static print:h-auto print:bg-white print:block" style={{ overscrollBehavior: "contain" }}>
       {/* Toolbar — picker + print button. Hidden on print. */}
-      <div className="flex-none bg-slate-50 px-3 pt-2 pb-2 border-b border-slate-200 print:hidden">
+      <div className="no-print flex-none bg-slate-50 px-3 pt-2 pb-2 border-b border-slate-200 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <button onClick={() => navigate(-1)}
@@ -513,6 +559,10 @@ export default function PrintVoucher() {
               className="flex items-center gap-1 px-3 py-1.5 border border-blue-600 rounded hover:bg-blue-700 bg-blue-600 text-[12px] text-white disabled:opacity-40">
               <Printer size={12} /> Print
             </button>
+            <button onClick={handleDownload} disabled={!voucher}
+              className="flex items-center gap-1 px-3 py-1.5 border border-emerald-600 rounded hover:bg-emerald-700 bg-emerald-600 text-[12px] text-white disabled:opacity-40">
+              <Download size={12} /> Download PDF
+            </button>
           </div>
         </div>
       </div>
@@ -543,7 +593,7 @@ export default function PrintVoucher() {
       ) : (
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-3 p-3 overflow-hidden print:p-0 print:gap-0 print:block">
           {/* ── LEFT: Editor panel ── */}
-          <div className="overflow-auto bg-white border border-slate-300 rounded p-3 space-y-4 print:hidden">
+          <div className="no-print overflow-auto bg-white border border-slate-300 rounded p-3 space-y-4 print:hidden">
             <Section title="Company">
               <Input label="Name" value={company.name} onChange={v => setCompany(c => ({ ...c, name: v }))} />
               <TextArea label="Address" value={company.address} onChange={v => setCompany(c => ({ ...c, address: v }))} rows={2} />
@@ -696,17 +746,19 @@ export default function PrintVoucher() {
 
           {/* ── RIGHT: Invoice preview ── */}
           <div className="overflow-auto print:overflow-visible">
-            <InvoicePreview
-              company={company}
-              voucher={voucher}
-              meta={meta}
-              billTo={billTo}
-              items={lineItems}
-              isIgst={isIgstInvoice}
-              totals={totals}
-              bank={activeBank}
-              terms={terms}
-            />
+            <div ref={invoiceRef}>
+              <InvoicePreview
+                company={company}
+                voucher={voucher}
+                meta={meta}
+                billTo={billTo}
+                items={lineItems}
+                isIgst={isIgstInvoice}
+                totals={totals}
+                bank={activeBank}
+                terms={terms}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -928,6 +980,8 @@ function InvoicePreview({
   bank: BankAccount;
   terms: string[];
 }) {
+  const payAmount = totals.total || Math.abs(Number(voucher?.amount || 0));
+  const upiQr = useUpiQr(payAmount, meta.invoice_no || voucher?.vch_no || '', bank.upi_id || '', bank.account_name || company.name);
   // Bill-to lines come from the editable billTo state (pre-filled from
   // the customer record). Each line renders only when populated so we
   // don't get blank rows on the printed invoice.
@@ -939,11 +993,41 @@ function InvoicePreview({
   ].filter(Boolean);
 
   return (
-    <div className="invoice-page bg-white text-slate-900 mx-auto" style={{ maxWidth: '820px', minHeight: '1100px' }}>
+    <div className="invoice-page bg-white text-slate-900 mx-auto" style={{ maxWidth: '820px' }}>
       <style>{`
         @media print {
           @page { size: A4; margin: 10mm; }
-          .invoice-page { box-shadow: none !important; max-width: 100% !important; }
+          .invoice-page { box-shadow: none !important; max-width: 100% !important; min-height: 0 !important; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+          a, a:visited { color: inherit !important; text-decoration: none !important; }
+          nav, header { display: none !important; }
+          .no-print { display: none !important; }
+          .print\\:hidden { display: none !important; }
+          .print\\:block { display: block !important; }
+          .print\\:overflow-visible { overflow: visible !important; }
+          .print\\:static { position: static !important; }
+          .print\\:h-auto { height: auto !important; }
+          .print\\:p-0 { padding: 0 !important; }
+          .print\\:gap-0 { gap: 0 !important; }
+          .print\\:bg-white { background-color: #ffffff !important; }
+          .print\\:border-0 { border: none !important; }
+          .print\\:shadow-none { box-shadow: none !important; }
+          td, th { color: inherit !important; }
+          .bg-emerald-800 { background-color: #065f46 !important; color: #ffffff !important; }
+          .text-emerald-800 { color: #065f46 !important; }
+          .bg-emerald-50 { background-color: #ecfdf5 !important; }
+          .text-emerald-700 { color: #047857 !important; }
+          .border-slate-200 { border-color: #e2e8f0 !important; }
+          .border-emerald-900 { border-color: #064e3b !important; }
+          .text-slate-600 { color: #475569 !important; }
+          .text-slate-400 { color: #94a3b8 !important; }
+          .text-slate-700 { color: #334155 !important; }
+          .text-slate-900 { color: #0f172a !important; }
+          .text-slate-800 { color: #1e293b !important; }
+          .text-slate-500 { color: #64748b !important; }
+          .font-medium { font-weight: 500 !important; }
+          .font-semibold { font-weight: 600 !important; }
+          .font-bold { font-weight: 700 !important; }
         }
       `}</style>
 
@@ -963,6 +1047,14 @@ function InvoicePreview({
             </div>
             <div className="text-[12px] font-semibold text-slate-800 mt-0.5">GSTIN: {company.gstin}</div>
           </div>
+          {/* QR + UPI in header top-right */}
+          {upiQr && (
+            <div className="flex-shrink-0 text-right flex flex-col items-end gap-1">
+              <img src={upiQr} alt="UPI QR"
+                className="w-24 h-24 object-contain border border-slate-200 rounded bg-white" />
+              <div className="text-[10px] text-slate-500">UPI: <span className="font-medium text-slate-700">{bank.upi_id}</span></div>
+            </div>
+          )}
         </div>
 
         {/* Title */}
@@ -970,9 +1062,9 @@ function InvoicePreview({
           <div className="text-2xl font-bold text-emerald-800 tracking-wide">TAX INVOICE</div>
         </div>
 
-        {/* Invoice + Bill To */}
-        <div className="grid grid-cols-2 gap-4 mb-3">
-          <div className="border border-slate-200 rounded p-3 bg-slate-50/50">
+        {/* Invoice + Bill To — one box with vertical divider */}
+        <div className="border border-slate-200 rounded bg-slate-50/50 mb-3 flex">
+          <div className="flex-1 p-3">
             <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Invoice Details</div>
             <KV label="Invoice No."     value={meta.invoice_no || '—'} />
             <KV label="Invoice Date"    value={displayDate(meta.invoice_date)} />
@@ -981,7 +1073,8 @@ function InvoicePreview({
             <KV label="Reverse Charge"  value={meta.reverse_charge} />
             <KV label="Payment Terms"   value={meta.payment_terms} />
           </div>
-          <div className="border border-slate-200 rounded p-3 bg-slate-50/50">
+          <div className="w-px bg-slate-200 my-2" />
+          <div className="flex-1 p-3">
             <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Bill To</div>
             <div className="font-semibold text-[14px] text-slate-900">{billTo.name || voucher.party_name || '—'}</div>
             {billToLines.map((l, i) => (
@@ -1010,13 +1103,13 @@ function InvoicePreview({
         <table className="w-full border-collapse text-[12px] mb-3">
           <thead>
             <tr className="bg-emerald-800 text-white">
-              <th className="border border-emerald-900 px-2 py-2 text-left w-12">Sr. No.</th>
-              <th className="border border-emerald-900 px-2 py-2 text-left">Description</th>
-              <th className="border border-emerald-900 px-2 py-2 text-left w-20">SAC</th>
-              <th className="border border-emerald-900 px-2 py-2 text-left w-20">GST Rate</th>
-              <th className="border border-emerald-900 px-2 py-2 text-right w-14">Qty</th>
-              <th className="border border-emerald-900 px-2 py-2 text-right w-24">Rate (₹)</th>
-              <th className="border border-emerald-900 px-2 py-2 text-right w-28">Amount (₹)</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-10">#</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center">Description</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-20">SAC</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-20">GST Rate</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-14">Qty</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-24">Rate (₹)</th>
+              <th className="border border-emerald-900 px-2 py-2 text-center w-28">Amount (₹)</th>
             </tr>
           </thead>
           <tbody>
@@ -1028,7 +1121,7 @@ function InvoicePreview({
               </tr>
             ) : items.map((it, i) => (
               <tr key={i}>
-                <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{i + 1}.</td>
+                <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{i + 1}</td>
                 <td className="border border-slate-200 px-2 py-1.5">{it.description}</td>
                 <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{it.sac || '—'}</td>
                 <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{it.gst_rate}%</td>
@@ -1040,13 +1133,13 @@ function InvoicePreview({
             {items.length > 0 && (
               <>
                 <tr>
-                  <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{items.length + 1}.</td>
+                  <td className="border border-slate-200 px-2 py-1.5"></td>
                   <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total Taxable Amount</td>
                   <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(totals.taxable)}</td>
                 </tr>
                 {!isIgst && totals.cgst > 0 && (
                   <tr>
-                    <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{items.length + 2}.</td>
+                    <td className="border border-slate-200 px-2 py-1.5"></td>
                     <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right">CGST</td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
@@ -1055,7 +1148,7 @@ function InvoicePreview({
                 )}
                 {!isIgst && totals.sgst > 0 && (
                   <tr>
-                    <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{items.length + 3}.</td>
+                    <td className="border border-slate-200 px-2 py-1.5"></td>
                     <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right">SGST</td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
@@ -1064,7 +1157,7 @@ function InvoicePreview({
                 )}
                 {isIgst && totals.igst > 0 && (
                   <tr>
-                    <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{items.length + 2}.</td>
+                    <td className="border border-slate-200 px-2 py-1.5"></td>
                     <td colSpan={3} className="border border-slate-200 px-2 py-1.5"></td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right">IGST</td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">—</td>
@@ -1072,12 +1165,12 @@ function InvoicePreview({
                   </tr>
                 )}
                 <tr>
-                  <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{items.length + (isIgst ? 3 : 4)}.</td>
+                  <td className="border border-slate-200 px-2 py-1.5"></td>
                   <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total GST Amount</td>
                   <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(totals.cgst + totals.sgst + totals.igst)}</td>
                 </tr>
                 <tr className="bg-emerald-50">
-                  <td className="border border-slate-200 px-2 py-2 text-center tabular-nums">{items.length + (isIgst ? 4 : 5)}.</td>
+                  <td className="border border-slate-200 px-2 py-2"></td>
                   <td colSpan={5} className="border border-slate-200 px-2 py-2 text-right font-bold text-emerald-800 uppercase tracking-wide">Total Amount Payable</td>
                   <td className="border border-slate-200 px-2 py-2 text-right tabular-nums font-bold text-emerald-800">{fmt(totals.total)}</td>
                 </tr>
@@ -1086,42 +1179,26 @@ function InvoicePreview({
           </tbody>
         </table>
 
-        {/* Amount in words */}
-        {items.length > 0 && (
-          <div className="mb-3 p-2.5 bg-slate-50/50 border border-slate-200 rounded">
-            <div className="text-[11px] font-bold text-slate-700 uppercase">Amount in Words:</div>
-            <div className="text-[13px] font-medium text-slate-800">{numberToWords(totals.total)}</div>
-          </div>
-        )}
 
-        {/* Footer: bank | terms | sign */}
-        <div className="grid grid-cols-3 gap-4 pt-3 border-t border-slate-200">
-          <div>
-            <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Bank Details</div>
-            <KV label="Account Name" value={bank.account_name} />
-            <KV label="Account Number" value={bank.account_number} />
-            <KV label="IFSC Code" value={bank.ifsc} />
-            <KV label="Bank Name" value={bank.bank_name} />
-            {bank.branch && <KV label="Branch" value={bank.branch} />}
-            {/* QR + UPI block — QR sits to the left of the UPI ID so a
-                scanner can capture it directly from the printed page. */}
-            {(bank.upi_id || bank.qr_image) && (
-              <div className="mt-2 flex items-start gap-3">
-                {bank.qr_image && (
-                  <img src={bank.qr_image} alt="UPI QR"
-                    className="w-20 h-20 object-contain border border-slate-200 rounded bg-white flex-shrink-0" />
-                )}
-                {bank.upi_id && (
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] text-slate-500">UPI ID:</div>
-                    <div className="text-[12px] font-medium break-all">{bank.upi_id}</div>
-                    <div className="text-[10px] text-slate-500">Scan & Pay</div>
-                  </div>
-                )}
-              </div>
-            )}
+        {/* Amount in Words + Bank Details — single bordered row */}
+        <div className="border border-slate-200 rounded mb-3 mt-3 flex items-stretch text-[11px]">
+          {/* Left: Amount in Words */}
+          <div className="flex-1 px-3 py-2 border-r border-slate-200">
+            <span className="font-bold text-slate-700 uppercase">Amount in Words: </span>
+            <span className="text-slate-800 font-medium">{numberToWords(payAmount || totals.total)}</span>
           </div>
-          <div>
+          {/* Right: Bank details in 2×2 grid */}
+          <div className="px-3 py-2 grid grid-cols-2 gap-x-4 gap-y-0.5 content-center">
+            <div><span className="text-slate-500">Account Number</span> : <span className="font-medium">{bank.account_number}</span></div>
+            <div><span className="text-slate-500">Account Name</span> : <span className="font-medium">{bank.account_name}</span></div>
+            <div><span className="text-slate-500">Bank Name</span> : <span className="font-medium">{bank.bank_name}</span></div>
+            <div><span className="text-slate-500">IFSC Code</span> : <span className="font-medium">{bank.ifsc}</span></div>
+          </div>
+        </div>
+
+        {/* Footer: terms | sign */}
+        <div className="grid grid-cols-3 gap-4 pt-3 border-t border-slate-200">
+          <div className="col-span-2">
             <div className="text-[11px] font-bold text-slate-700 uppercase mb-2">Terms & Conditions</div>
             <ol className="text-[11px] text-slate-700 space-y-1">
               {terms.map((t, i) => (

@@ -129,6 +129,8 @@ function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/tdl/amc/:token" element={<AmcPublicView />} />
+              <Route path="/billing/print-voucher" element={<ProtectedRoute><PrintVoucher /></ProtectedRoute>} />
+              <Route path="/billing/print-voucher/:id" element={<ProtectedRoute><PrintVoucher /></ProtectedRoute>} />
               <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                 <Route index element={<Dashboard />} />
                 <Route path="profile" element={<Profile />} />
@@ -207,8 +209,6 @@ function App() {
                   <Route path="vouchers" element={<PermissionGuard entity="vouchers"><Vouchers /></PermissionGuard>} />
                   <Route path="vouchers/new" element={<PermissionGuard entity="vouchers"><Vouchers /></PermissionGuard>} />
                   <Route path="vouchers/edit/:id" element={<PermissionGuard entity={['vouchers', 'reports_outstanding', 'reports_ledger', 'reports_daybook']}><Vouchers /></PermissionGuard>} />
-                  <Route path="print-voucher" element={<PermissionGuard entity={['vouchers', 'reports_daybook']}><PrintVoucher /></PermissionGuard>} />
-                  <Route path="print-voucher/:id" element={<PermissionGuard entity={['vouchers', 'reports_daybook']}><PrintVoucher /></PermissionGuard>} />
                   <Route path="daybook" element={<PermissionGuard entity="reports_daybook"><Daybook /></PermissionGuard>} />
                   <Route path="pending-review" element={<PermissionGuard entity={['reports_daybook', 'vouchers']}><PendingReview /></PermissionGuard>} />
                   <Route path="bill-report" element={<PermissionGuard entity="reports_daybook"><BillReport /></PermissionGuard>} />

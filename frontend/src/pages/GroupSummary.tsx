@@ -108,7 +108,7 @@ export default function GroupSummary() {
             id: g.group_id,
             name: g.group_name,
             ledger_count: g.ledger_count,
-            opening: 0,
+            opening: Number(g.opening) || 0,
             debit: Number(g.total_debit) || 0,
             credit: Number(g.total_credit) || 0,
             closing: Number(g.net_balance) || 0,
@@ -118,7 +118,7 @@ export default function GroupSummary() {
             debit:   res.data.totals?.debit   || 0,
             credit:  res.data.totals?.credit  || 0,
             balance: res.data.totals?.balance || 0,
-            opening: 0,
+            opening: res.data.totals?.opening || 0,
             closing: res.data.totals?.balance || 0,
           });
         }

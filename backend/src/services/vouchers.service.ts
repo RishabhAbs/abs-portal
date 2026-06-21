@@ -918,61 +918,121 @@ export class VouchersService implements OnModuleInit {
         dateTo?: string;
         search?: string;
     }) {
-        const where: string[] = [];
-        const params: any[] = [];
-        if (opts.dateFrom) { where.push('v.vch_date >= ?'); params.push(opts.dateFrom); }
-        if (opts.dateTo)   { where.push('v.vch_date <= ?'); params.push(opts.dateTo); }
-        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        // Load ALL ledger groups so we can walk to true root in JS
+        const allGroups = await this.db.query<any>(`SELECT id, name, parent_id FROM ledgergroup`);
+        const groupMap = new Map<number, { id: number; name: string; parent_id: number | null }>();
+        for (const g of allGroups) groupMap.set(Number(g.id), { id: Number(g.id), name: g.name, parent_id: g.parent_id != null ? Number(g.parent_id) : null });
 
-        // Aggregate at the TOP-LEVEL parent group. Each ledger's group is
-        // walked up one level: if the ledger's group has a parent, use the
-        // parent; otherwise use the group itself. Ungrouped ledgers land in
-        // a virtual "Ungrouped" bucket.
-        // Walk up to root: if a ledger's group has a parent, aggregate under
-        // the root ancestor so only top-level groups appear on the summary.
-        const rows = await this.db.query<any>(
-            `SELECT COALESCE(root.id, lg.id)                             AS group_id,
-                    MIN(COALESCE(root.name, lg.name, 'Ungrouped'))       AS group_name,
-                    COUNT(DISTINCT c.id)                                  AS ledger_count,
-                    COUNT(DISTINCT le.vch_id)                             AS voucher_count,
-                    COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount  ELSE 0 END), 0) AS total_debit,
-                    COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0) AS total_credit,
-                    COALESCE(SUM(le.amount), 0)                           AS net_balance
-             FROM ledger_entries le
-             INNER JOIN vch_details v     ON le.vch_id = v.id
-             LEFT  JOIN customer c        ON le.ledger_id = c.id
-             LEFT  JOIN ledgergroup lg    ON c.ledgergroup = lg.id
-             LEFT  JOIN ledgergroup root  ON lg.parent_id = root.id
-             ${whereSql}
-             GROUP BY COALESCE(root.id, lg.id)
-             ORDER BY MIN(COALESCE(root.name, lg.name)) ASC`,
-            params,
+        // Walk up to the true root ancestor (parent_id IS NULL)
+        const rootOf = (gid: number): { id: number; name: string } => {
+            let cur = groupMap.get(gid);
+            if (!cur) return { id: gid, name: 'Ungrouped' };
+            const visited = new Set<number>();
+            while (cur.parent_id != null && !visited.has(cur.id)) {
+                visited.add(cur.id);
+                const parent = groupMap.get(cur.parent_id);
+                if (!parent) break;
+                cur = parent;
+            }
+            return { id: cur.id, name: cur.name };
+        };
+
+        // Only root groups (parent_id IS NULL) should appear in the root view
+        const rootGroupIds = new Set<number>();
+        for (const g of allGroups) {
+            if (g.parent_id == null) rootGroupIds.add(Number(g.id));
+        }
+
+        // Load all customers with opening balances
+        const customers = await this.db.query<any>(
+            `SELECT c.id, c.ledgergroup,
+                    COALESCE(c.opening_balance, 0) *
+                      CASE WHEN c.opening_balance_type = 'Cr' THEN -1 ELSE 1 END AS master_opening
+             FROM customer c`,
         );
 
+        // Prior activity (before dateFrom) per ledger
+        const priorParams: any[] = [];
+        let priorSql = '';
+        if (opts.dateFrom) {
+            priorSql = `SELECT le.ledger_id, COALESCE(SUM(le.amount), 0) AS prior_total
+                        FROM ledger_entries le
+                        INNER JOIN vch_details v ON le.vch_id = v.id
+                        WHERE v.vch_date < ?
+                        GROUP BY le.ledger_id`;
+            priorParams.push(opts.dateFrom);
+        }
+        const priorRows = priorSql ? await this.db.query<any>(priorSql, priorParams) : [];
+        const priorByLed = new Map<number, number>();
+        for (const r of priorRows) priorByLed.set(Number(r.ledger_id), Number(r.prior_total) || 0);
+
+        // Range activity per ledger
+        const rangeWhere: string[] = [];
+        const rangeParams: any[] = [];
+        if (opts.dateFrom) { rangeWhere.push('v.vch_date >= ?'); rangeParams.push(opts.dateFrom); }
+        if (opts.dateTo)   { rangeWhere.push('v.vch_date <= ?'); rangeParams.push(opts.dateTo); }
+        const rangeCondSql = rangeWhere.length ? 'WHERE ' + rangeWhere.join(' AND ') : '';
+        const rangeRows = await this.db.query<any>(
+            `SELECT le.ledger_id,
+                    COALESCE(SUM(CASE WHEN le.amount > 0 THEN le.amount ELSE 0 END), 0) AS debit_total,
+                    COALESCE(SUM(CASE WHEN le.amount < 0 THEN ABS(le.amount) ELSE 0 END), 0) AS credit_total
+             FROM ledger_entries le
+             INNER JOIN vch_details v ON le.vch_id = v.id
+             ${rangeCondSql}
+             GROUP BY le.ledger_id`,
+            rangeParams,
+        );
+        const rangeByLed = new Map<number, { debit: number; credit: number }>();
+        for (const r of rangeRows) rangeByLed.set(Number(r.ledger_id), {
+            debit:  Number(r.debit_total)  || 0,
+            credit: Number(r.credit_total) || 0,
+        });
+
+        // Aggregate by true root group
+        const byRoot = new Map<number, { name: string; ledger_count: number; opening: number; debit: number; credit: number }>();
+
+        for (const c of customers) {
+            const gid = c.ledgergroup != null ? Number(c.ledgergroup) : null;
+            const root = gid != null ? rootOf(gid) : { id: -1, name: 'Ungrouped' };
+            if (!byRoot.has(root.id)) byRoot.set(root.id, { name: root.name, ledger_count: 0, opening: 0, debit: 0, credit: 0 });
+            const bucket = byRoot.get(root.id)!;
+            const masterOpening = Number(c.master_opening) || 0;
+            const prior = priorByLed.get(Number(c.id)) || 0;
+            const opening = masterOpening + prior;
+            const range = rangeByLed.get(Number(c.id)) || { debit: 0, credit: 0 };
+            bucket.ledger_count += 1;
+            bucket.opening += opening;
+            bucket.debit   += range.debit;
+            bucket.credit  += range.credit;
+        }
+
         const search = (opts.search || '').trim().toLowerCase();
-        const data = rows
-            .map((r: any) => ({
-                group_id:      r.group_id,
-                group_name:    r.group_name,
-                ledger_count:  Number(r.ledger_count)  || 0,
-                voucher_count: Number(r.voucher_count) || 0,
-                total_debit:   +Number(r.total_debit   || 0).toFixed(2),
-                total_credit:  +Number(r.total_credit  || 0).toFixed(2),
-                net_balance:   +Number(r.net_balance   || 0).toFixed(2),
+        const data = Array.from(byRoot.entries())
+            .map(([gid, b]) => ({
+                group_id:     gid,
+                group_name:   b.name,
+                ledger_count: b.ledger_count,
+                total_debit:  +b.debit.toFixed(2),
+                total_credit: +b.credit.toFixed(2),
+                opening:      +b.opening.toFixed(2),
+                net_balance:  +(b.opening + b.debit - b.credit).toFixed(2),
             }))
-            .filter((g: any) => !search || g.group_name.toLowerCase().includes(search));
+            .filter((g) => !search || g.group_name.toLowerCase().includes(search))
+            .sort((a, b) => a.group_name.localeCompare(b.group_name));
 
         const totals = data.reduce((acc, g) => ({
             debit:   acc.debit   + g.total_debit,
             credit:  acc.credit  + g.total_credit,
+            opening: acc.opening + g.opening,
             balance: acc.balance + g.net_balance,
-        }), { debit: 0, credit: 0, balance: 0 });
+        }), { debit: 0, credit: 0, opening: 0, balance: 0 });
 
         return {
             rows: data,
             totals: {
                 debit:   +totals.debit.toFixed(2),
                 credit:  +totals.credit.toFixed(2),
+                opening: +totals.opening.toFixed(2),
                 balance: +totals.balance.toFixed(2),
             },
         };
@@ -1373,6 +1433,71 @@ export class VouchersService implements OnModuleInit {
         const moveByItem = new Map<number, any>();
         for (const m of movement) moveByItem.set(Number(m.item_id), m);
 
+        // Prior-period movement (before dateFrom) to compute true opening
+        const priorMoveByItem = new Map<number, { qty: number; value: number }>();
+        if (opts.dateFrom) {
+            const priorMovement = await this.db.query<any>(
+                `SELECT ie.item_id,
+                        SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                               AND COALESCE(ie.qty, ie.amount) >= 0
+                              THEN ABS(ie.qty) ELSE 0 END)
+                      - SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%debit note%'
+                                OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                    AND COALESCE(ie.qty, ie.amount) >= 0)
+                              THEN ABS(ie.qty) ELSE 0 END)           AS net_inward_qty,
+                        SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                               AND COALESCE(ie.qty, ie.amount) >= 0
+                              THEN ABS(ie.amount) ELSE 0 END)
+                      - SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%debit note%'
+                                OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                    AND COALESCE(ie.qty, ie.amount) >= 0)
+                              THEN ABS(ie.amount) ELSE 0 END)        AS net_inward_value,
+                        SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                               AND COALESCE(ie.qty, ie.amount) < 0
+                              THEN ABS(ie.qty) ELSE 0 END)
+                      - SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%credit note%'
+                                OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                    AND COALESCE(ie.qty, ie.amount) < 0)
+                              THEN ABS(ie.qty) ELSE 0 END)           AS net_outward_qty,
+                        SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%credit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%debit note%'
+                               AND LOWER(COALESCE(p.name, vt.name, '')) NOT LIKE '%return%'
+                               AND COALESCE(ie.qty, ie.amount) < 0
+                              THEN ABS(ie.amount) ELSE 0 END)
+                      - SUM(CASE
+                              WHEN LOWER(COALESCE(p.name, vt.name, '')) LIKE '%credit note%'
+                                OR (LOWER(COALESCE(p.name, vt.name, '')) LIKE '%return%'
+                                    AND COALESCE(ie.qty, ie.amount) < 0)
+                              THEN ABS(ie.amount) ELSE 0 END)        AS net_outward_value
+                 FROM inventory_entries ie
+                 INNER JOIN ledger_entries le ON ie.led_id = le.id
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 LEFT JOIN vchtype vt ON v.vch_type_id = vt.id
+                 LEFT JOIN vchtype p  ON vt.parent_id = p.id AND vt.parent_id != vt.id
+                 WHERE v.vch_date < ?
+                 GROUP BY ie.item_id`,
+                [opts.dateFrom],
+            );
+            for (const m of priorMovement) {
+                const netQty   = (Number(m.net_inward_qty)   || 0) - (Number(m.net_outward_qty)   || 0);
+                const netValue = (Number(m.net_inward_value) || 0) - (Number(m.net_outward_value) || 0);
+                priorMoveByItem.set(Number(m.item_id), { qty: netQty, value: netValue });
+            }
+        }
+
         // All items, even those with no movement — those just show their
         // opening as both opening and closing so the report is complete.
         const items = await this.db.query<any>(
@@ -1390,8 +1515,9 @@ export class VouchersService implements OnModuleInit {
         const data = items
             .map((i: any) => {
                 const m = moveByItem.get(Number(i.id)) || {};
-                const openingQty        = Number(i.opening_qty)          || 0;
-                const openingValue      = Number(i.opening_value)        || 0;
+                const prior             = priorMoveByItem.get(Number(i.id)) || { qty: 0, value: 0 };
+                const openingQty        = (Number(i.opening_qty)   || 0) + prior.qty;
+                const openingValue      = (Number(i.opening_value) || 0) + prior.value;
                 const purchaseValue     = Number(m.purchase_value)       || 0;
                 const purchaseReturnVal = Number(m.purchase_return_value) || 0;
                 const salesValue        = Number(m.sales_value)          || 0;
