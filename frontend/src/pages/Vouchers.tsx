@@ -31,10 +31,8 @@ const DEFAULT_BANK = {
   qr_image:       '',
 };
 const DEFAULT_TERMS = [
-  'Payment of bill must be made within 15 Days.',
-  'Subject to Guwahati Jurisdiction.',
+  'Payment of bill must be made within 7 Days.',
   'Services once activated are non-refundable.',
-  'This is a computer generated invoice and does not require physical signature.',
 ];
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -3998,6 +3996,8 @@ const Vouchers: React.FC = () => {
               })()}
 
               <div className="text-center text-[11px] text-emerald-700 font-medium pt-3 mt-3 border-t border-slate-200">
+  'Subject to Guwahati Jurisdiction.',/n
+  'This is a computer generated invoice and does not require physical signature.'/n
                 ♥ Thank you for your business!
               </div>
             </div>

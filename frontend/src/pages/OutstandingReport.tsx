@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, RotateCcw, Search, X } from 'lucide-react';
 import { vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
@@ -58,6 +58,8 @@ function defaultFilters() {
 export default function OutstandingReport() {
   const navigate = useNavigate();
   const { showError } = useToast();
+  const { side: sideParam } = useParams<{ side?: string }>();
+  const lockedSide: Side | null = sideParam === 'payable' || sideParam === 'receivable' ? sideParam : null;
 
   const initial = (() => {
     try {
@@ -69,7 +71,11 @@ export default function OutstandingReport() {
 
   const [dateFrom, setDateFrom] = useState<string>(initial.dateFrom);
   const [dateTo, setDateTo]     = useState<string>(initial.dateTo);
-  const [side, setSide]         = useState<Side>(initial.side);
+  const [side, setSide]         = useState<Side>(lockedSide || initial.side);
+
+  useEffect(() => {
+    if (lockedSide) setSide(lockedSide);
+  }, [lockedSide]);
   const [partySearch, setPartySearch] = useState<string>(initial.partySearch);
   const [billNameFilter, setBillNameFilter] = useState<string>(initial.billName);
   const [debouncedParty, setDebouncedParty] = useState<string>(initial.partySearch);
@@ -77,6 +83,7 @@ export default function OutstandingReport() {
   const [loading, setLoading] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [hideZero, setHideZero] = useState(false);
   const [bills, setBills] = useState<Bill[]>([]);
   const [totals, setTotals] = useState({ receivable: 0, payable: 0 });
 
@@ -92,9 +99,10 @@ export default function OutstandingReport() {
     const d = defaultFilters();
     setDateFrom(d.dateFrom);
     setDateTo(d.dateTo);
-    setSide(d.side);
+    setSide(lockedSide || d.side);
     setPartySearch(d.partySearch);
     setBillNameFilter(d.billName);
+    setHideZero(false);
   };
 
   const defaults = defaultFilters();
@@ -102,7 +110,8 @@ export default function OutstandingReport() {
   const filterCount =
     (partySearch ? 1 : 0) +
     (billNameFilter ? 1 : 0) +
-    (side !== 'all' ? 1 : 0) +
+    (!lockedSide && side !== 'all' ? 1 : 0) +
+    (hideZero ? 1 : 0) +
     (dateRangeChanged ? 1 : 0);
 
   const [sortKey, setSortKey] = useState<SortKey>('bill_date');
@@ -166,10 +175,10 @@ export default function OutstandingReport() {
   }, [dateFrom, dateTo, debouncedParty, debouncedBill, side, showError]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [debouncedParty, debouncedBill, side, dateFrom, dateTo, pageSize, sortKey, sortDir]);
+  useEffect(() => { setPage(1); }, [debouncedParty, debouncedBill, side, dateFrom, dateTo, pageSize, sortKey, sortDir, hideZero]);
 
   const sorted = useMemo(() => {
-    const arr = [...bills];
+    const arr = bills.filter(b => !hideZero || Math.abs(b.closing_balance) > 0.005);
     const dir = sortDir === 'asc' ? 1 : -1;
     arr.sort((a, b) => {
       const av = a[sortKey] as any;
@@ -183,7 +192,7 @@ export default function OutstandingReport() {
       return String(av ?? '').localeCompare(String(bv ?? '')) * dir;
     });
     return arr;
-  }, [bills, sortKey, sortDir]);
+  }, [bills, sortKey, sortDir, hideZero]);
 
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -218,7 +227,9 @@ export default function OutstandingReport() {
           <button onClick={() => navigate(-1)} className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 -ml-1" title="Back">
             <ChevronLeft size={20} />
           </button>
-          <h1 className="text-[17px] font-bold text-slate-800">Outstanding Report</h1>
+          <h1 className="text-[17px] font-bold text-slate-800">
+            {lockedSide === 'payable' ? 'Payables Outstanding' : lockedSide === 'receivable' ? 'Receivables Outstanding' : 'Outstanding Report'}
+          </h1>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -250,23 +261,6 @@ export default function OutstandingReport() {
         </div>
       </div>
 
-      {/* ── Stats bar — desktop only; mobile shows the same totals in the Grand Total bar above pagination ── */}
-      <div className="hidden sm:block flex-none bg-white border-b border-slate-200">
-        <div className="flex divide-x divide-slate-200">
-          <div className="flex-1 px-3 py-2.5">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Payable</div>
-            <div className="text-[14px] font-bold text-red-600 tabular-nums mt-0.5">{fmt(totals.payable)}</div>
-          </div>
-          <div className="flex-1 px-3 py-2.5">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Receivable</div>
-            <div className="text-[14px] font-bold text-emerald-600 tabular-nums mt-0.5">{fmt(totals.receivable)}</div>
-          </div>
-          <div className="px-3 py-2.5 flex flex-col items-end justify-center">
-            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Bills</div>
-            <div className="text-[14px] font-bold text-slate-700 tabular-nums mt-0.5">{totalRows}</div>
-          </div>
-        </div>
-      </div>
 
       {/* ── Search bar (slide-down) ── */}
       {showSearch && (
@@ -292,40 +286,44 @@ export default function OutstandingReport() {
       {/* ── Filter panel (slide-down) ── */}
       {showFilter && (
         <div className="flex-none bg-slate-50 border-b border-slate-200 px-3 py-3 space-y-2">
-          <div className="relative">
-            <input
-              value={billNameFilter}
-              onChange={e => setBillNameFilter(e.target.value)}
-              placeholder="Bill no…"
-              className="w-full pl-3 pr-8 py-2 border border-slate-300 rounded-lg text-[13px] outline-none focus:ring-2 focus:ring-blue-300 bg-white"
-            />
-            {billNameFilter && (
-              <button onClick={() => setBillNameFilter('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"><X size={13} /></button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <div className="flex-1 flex items-stretch border border-slate-300 rounded-lg bg-white overflow-hidden">
+          <div className="flex gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[140px]">
+              <input
+                value={billNameFilter}
+                onChange={e => setBillNameFilter(e.target.value)}
+                placeholder="Bill no…"
+                className="w-full pl-3 pr-8 py-2 border border-slate-300 rounded-lg text-[13px] outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+              />
+              {billNameFilter && (
+                <button onClick={() => setBillNameFilter('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"><X size={13} /></button>
+              )}
+            </div>
+            <div className="flex items-stretch border border-slate-300 rounded-lg bg-white overflow-hidden">
               <div className="flex items-center px-2 border-r border-slate-300 bg-slate-100">
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">From</span>
               </div>
               <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                className="flex-1 text-[13px] text-slate-700 outline-none bg-transparent px-2 py-1.5 min-w-0" />
-            </div>
-            <div className="flex-1 flex items-stretch border border-slate-300 rounded-lg bg-white overflow-hidden">
-              <div className="flex items-center px-2 border-r border-slate-300 bg-slate-100">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">To</span>
+                className="text-[13px] text-slate-700 outline-none bg-transparent px-2 py-1.5 w-[115px]" />
+              <div className="flex items-center px-2 border-l border-r border-slate-300 bg-slate-100">
+                <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wide">To</span>
               </div>
               <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                className="flex-1 text-[13px] text-slate-700 outline-none bg-transparent px-2 py-1.5 min-w-0" />
+                className="text-[13px] text-slate-700 outline-none bg-transparent px-2 py-1.5 w-[115px]" />
             </div>
           </div>
-          <div className="flex gap-2">
-            <select value={side} onChange={e => setSide(e.target.value as Side)}
-              className="flex-1 text-[13px] border border-slate-300 rounded-lg px-3 py-2 bg-white outline-none">
-              <option value="all">All sides</option>
-              <option value="receivable">Receivable only</option>
-              <option value="payable">Payable only</option>
-            </select>
+          <div className="flex gap-2 flex-wrap items-center">
+            {!lockedSide && (
+              <select value={side} onChange={e => setSide(e.target.value as Side)}
+                className="flex-1 min-w-[140px] text-[13px] border border-slate-300 rounded-lg px-3 py-2 bg-white outline-none">
+                <option value="all">All sides</option>
+                <option value="receivable">Receivable only</option>
+                <option value="payable">Payable only</option>
+              </select>
+            )}
+            <label className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg bg-white text-[13px] text-slate-600 cursor-pointer whitespace-nowrap">
+              <input type="checkbox" checked={hideZero} onChange={e => setHideZero(e.target.checked)} className="cursor-pointer" />
+              Hide zero
+            </label>
             <button onClick={resetAll} disabled={filterCount === 0}
               className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-[13px] text-slate-600 bg-white hover:bg-slate-100 disabled:opacity-40">
               <RotateCcw size={13} /> Reset

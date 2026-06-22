@@ -63,6 +63,7 @@ export default function GroupSummary() {
   const [search, setSearch]     = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showControls, setShowControls] = useState(false);
+  const [hideZero, setHideZero] = useState(false);
   const [loading, setLoading]   = useState(false);
   const [printing, setPrinting] = useState(false);
 
@@ -83,7 +84,7 @@ export default function GroupSummary() {
     return () => clearTimeout(t);
   }, [search]);
 
-  useEffect(() => { setPage(1); }, [currentGroupId, debouncedSearch, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [currentGroupId, debouncedSearch, dateFrom, dateTo, hideZero]);
 
   useEffect(() => {
     const onAfter = () => setPrinting(false);
@@ -172,9 +173,11 @@ export default function GroupSummary() {
   };
 
   // Filter + paginate
-  const filtered = debouncedSearch
-    ? rows.filter(r => r.name.toLowerCase().includes(debouncedSearch.toLowerCase()))
-    : rows;
+  const filtered = rows
+    .filter(r => !debouncedSearch || r.name.toLowerCase().includes(debouncedSearch.toLowerCase()))
+    .filter(r => !hideZero ||
+      Math.abs(r.opening) > 0.005 || Math.abs(r.debit) > 0.005 ||
+      Math.abs(r.credit)  > 0.005 || Math.abs(r.closing) > 0.005);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage   = Math.min(page, totalPages);
   const pageRows   = printing ? filtered : filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -266,12 +269,61 @@ export default function GroupSummary() {
               <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
                 className="text-[13px] text-slate-700 outline-none bg-transparent px-2 py-1.5 w-[115px]" />
             </div>
+            <label className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg bg-white text-[13px] text-slate-600 cursor-pointer whitespace-nowrap">
+              <input type="checkbox" checked={hideZero} onChange={e => setHideZero(e.target.checked)} className="cursor-pointer" />
+              Hide zero
+            </label>
           </div>
         </div>
       )}
 
-      {/* Table */}
-      <div className="flex-1 min-h-0 overflow-auto bg-white">
+      {/* ── Mobile card list ── */}
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white">
+        {loading ? (
+          <div className="py-16 text-center text-slate-400 text-sm">Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="py-16 text-center text-slate-400 text-sm px-8">
+            {debouncedSearch ? `No results for "${debouncedSearch}"` : `No data for ${displayDate(dateFrom)} – ${displayDate(dateTo)}`}
+          </div>
+        ) : pageRows.map((row) => {
+          const isGroup = row.type === 'group';
+          const positive = row.closing >= 0;
+          return (
+            <div key={`${row.type}-${row.id}`}
+              onClick={() => drillDown(row)}
+              className="border-b border-slate-100 px-4 py-3 active:bg-slate-50">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  {isGroup
+                    ? <ArrowRight size={14} className="text-blue-400 flex-shrink-0" />
+                    : <span className="w-3 h-3 rounded-full border border-slate-300 flex-shrink-0" />}
+                  <span className={`text-[15px] leading-snug truncate ${isGroup ? 'font-bold text-slate-900' : 'text-slate-700'}`}>
+                    {row.name}
+                  </span>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className={`text-[16px] font-bold tabular-nums leading-tight ${positive ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {Math.abs(row.closing) > 0.005 ? fmt(Math.abs(row.closing)) : '—'}
+                  </div>
+                  {Math.abs(row.closing) > 0.005 && (
+                    <div className={`text-[10px] font-bold tracking-wide ${positive ? 'text-emerald-500' : 'text-red-400'}`}>
+                      {positive ? 'DEBIT' : 'CREDIT'}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 mt-1.5 text-[11px] text-slate-400">
+                <span>Op: {Math.abs(row.opening) > 0.005 ? `${fmt(Math.abs(row.opening))} ${row.opening > 0 ? 'Dr' : 'Cr'}` : '—'}</span>
+                <span className="text-emerald-600">Dr: {row.debit > 0 ? fmt(row.debit) : '—'}</span>
+                <span className="text-red-500">Cr: {row.credit > 0 ? fmt(row.credit) : '—'}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Desktop table ── */}
+      <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white">
         <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">
             <tr>
@@ -355,6 +407,39 @@ export default function GroupSummary() {
           )}
         </table>
       </div>
+
+      {/* ── Grand Total — mobile only ── */}
+      {!loading && filtered.length > 0 && (
+        <div className="sm:hidden flex-none border-t border-slate-200 print:hidden">
+          <div className="bg-blue-700 text-white px-4 py-2 flex justify-between items-center">
+            <span className="font-bold text-[13px] uppercase tracking-widest">
+              {isRoot ? `Total (${filtered.length} groups)` : `Total (${filtered.filter(r => r.type === 'group').length} sub-groups, ${filtered.filter(r => r.type === 'ledger').length} ledgers)`}
+            </span>
+          </div>
+          <div className="flex divide-x divide-slate-200 bg-white">
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Opening</div>
+              <div className="text-[13px] font-bold text-slate-700 tabular-nums mt-0.5">
+                {Math.abs(totals.opening) > 0.005 ? fmt(Math.abs(totals.opening)) : '—'}
+              </div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Debit</div>
+              <div className="text-[13px] font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(totals.debit)}</div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Credit</div>
+              <div className="text-[13px] font-bold text-red-600 tabular-nums mt-0.5">{fmt(totals.credit)}</div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Closing</div>
+              <div className="text-[13px] font-bold text-slate-800 tabular-nums mt-0.5">
+                {fmt(Math.abs(isRoot ? totals.balance : totals.closing))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pagination */}
       {!printing && filtered.length > PAGE_SIZE && (

@@ -1,0 +1,102 @@
+{
+  "info": {
+    "name": "ABS Tally Sync API",
+    "description": "Poll-and-acknowledge voucher sync between ABS Cloud and Tally.\n\nFlow:\n1. Tally calls GET /api/tally-sync/vouchers to pull unsynced vouchers.\n2. Tally imports them locally.\n3. Tally calls POST /api/tally-sync/acknowledge with the imported voucher IDs.\n4. Those vouchers are stamped tally_synced_at and excluded from future GET polls.\n\nAuth: every request needs header `x-tally-key: {{tally_key}}`. Default key is `abs-tally-2024` unless TALLY_SYNC_KEY is set in the backend .env.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "abs-tally-sync-collection"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:5000" },
+    { "key": "tally_key", "value": "abs-tally-2024" }
+  ],
+  "item": [
+    {
+      "name": "Get Unsynced Vouchers",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-tally-key", "value": "{{tally_key}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
+          "host": ["{{base_url}}"],
+          "path": ["api", "tally-sync", "vouchers"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "100" },
+            { "key": "date_from", "value": "2026-04-01", "disabled": true },
+            { "key": "date_to", "value": "2026-06-30", "disabled": true },
+            { "key": "vch_type", "value": "Sales", "disabled": true },
+            { "key": "include_all", "value": "1", "disabled": true }
+          ]
+        },
+        "description": "Pulls vouchers where tally_synced_at IS NULL (default). Add include_all=1 to also fetch already-synced vouchers (re-import / audit). Filter by date_from, date_to, vch_type (Sales | Purchase | Payment | Receipt | Journal | Contra). Max limit is 500."
+      },
+      "response": []
+    },
+    {
+      "name": "Get All Vouchers (include_all)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-tally-key", "value": "{{tally_key}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100&include_all=1",
+          "host": ["{{base_url}}"],
+          "path": ["api", "tally-sync", "vouchers"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "100" },
+            { "key": "include_all", "value": "1" }
+          ]
+        },
+        "description": "Same as Get Unsynced Vouchers but includes vouchers that were already acknowledged. Useful for re-import or auditing the full export."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Vouchers By Date Range",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-tally-key", "value": "{{tally_key}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/tally-sync/vouchers?date_from=2026-04-01&date_to=2026-06-30&page=1&limit=200",
+          "host": ["{{base_url}}"],
+          "path": ["api", "tally-sync", "vouchers"],
+          "query": [
+            { "key": "date_from", "value": "2026-04-01" },
+            { "key": "date_to", "value": "2026-06-30" },
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "200" }
+          ]
+        },
+        "description": "Filters unsynced vouchers to a specific date window."
+      },
+      "response": []
+    },
+    {
+      "name": "Acknowledge Synced Vouchers",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "x-tally-key", "value": "{{tally_key}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ids\": [1, 2, 3]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/tally-sync/acknowledge",
+          "host": ["{{base_url}}"],
+          "path": ["api", "tally-sync", "acknowledge"]
+        },
+        "description": "Call this after Tally has successfully imported a batch of vouchers. Stamps tally_synced_at = NOW() on each ID so they're excluded from future GET polls. Idempotent — already-acknowledged IDs are silently skipped, response.acknowledged reflects only newly-stamped rows."
+      },
+      "response": []
+    }
+  ]
+}

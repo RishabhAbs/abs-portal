@@ -188,7 +188,15 @@ const Layout: React.FC = () => {
       path: '#',
       icon: <BarChart2 className="h-5 w-5" />,
       children: [
-        { label: 'Outstanding Report',   path: '/reports/outstanding',      entity: 'reports_outstanding' as EntityType,      icon: <FileText className="h-4 w-4" /> },
+        {
+          label: 'Outstanding',
+          path: '#',
+          icon: <FileText className="h-4 w-4" />,
+          children: [
+            { label: 'Payable',    path: '/reports/outstanding/payable',    entity: 'reports_outstanding' as EntityType, icon: <FileText className="h-4 w-4" /> },
+            { label: 'Receivable', path: '/reports/outstanding/receivable', entity: 'reports_outstanding' as EntityType, icon: <FileText className="h-4 w-4" /> },
+          ]
+        },
         { label: 'User-wise Outstanding',path: '/reports/user-outstanding', entity: ['reports_user_outstanding', 'reports_outstanding'] as EntityType[], icon: <UsersIcon className="h-4 w-4" /> },
         { label: 'Ledger Report',        path: '/reports/ledger',           entity: 'reports_ledger' as EntityType,           icon: <FileText className="h-4 w-4" /> },
         { label: 'Day Book',             path: '/billing/daybook',          entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
@@ -196,6 +204,8 @@ const Layout: React.FC = () => {
         { label: 'Sales Register',       path: '/reports/sales-register',   entity: ['reports_sales_register', 'reports_daybook'] as EntityType[], icon: <Receipt className="h-4 w-4" /> },
         { label: 'Group Summary',        path: '/reports/group-summary',    entity: ['reports_group_summary', 'reports_daybook'] as EntityType[], icon: <Layers className="h-4 w-4" /> },
         { label: 'Stock Summary',        path: '/reports/stock-summary',    entity: ['reports_stock_summary', 'reports_daybook'] as EntityType[], icon: <BarChart2 className="h-4 w-4" /> },
+        { label: 'Bill Report',          path: '/billing/bill-report',      entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
+        { label: 'Payment Report',       path: '/billing/payment-report',   entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
         { label: 'Call Report',          path: '/visit/call-report',        entity: 'call_report' as EntityType,              icon: <PhoneCall className="h-4 w-4" /> },
         { label: 'Task',                 path: '/task-report',              entity: 'tasks' as EntityType,                    icon: <FileText className="h-4 w-4" /> },
         {
@@ -733,7 +743,8 @@ const Layout: React.FC = () => {
               <p className="text-[11px] uppercase tracking-widest text-gray-400 font-bold mb-2 px-1">Reports</p>
               <div className="space-y-1">
                 {[
-                  { label: 'Outstanding Report',    path: '/reports/outstanding',      entity: 'reports_outstanding' as any,   icon: <FileText className="h-4 w-4" /> },
+                  { label: 'Outstanding · Payable',    path: '/reports/outstanding/payable',    entity: 'reports_outstanding' as any, icon: <FileText className="h-4 w-4" /> },
+                  { label: 'Outstanding · Receivable', path: '/reports/outstanding/receivable', entity: 'reports_outstanding' as any, icon: <FileText className="h-4 w-4" /> },
                   { label: 'User-wise Outstanding', path: '/reports/user-outstanding', entity: 'reports_user_outstanding' as any, icon: <UsersIcon className="h-4 w-4" /> },
                   { label: 'Ledger Report',         path: '/reports/ledger',           entity: 'reports_ledger' as any,        icon: <FileText className="h-4 w-4" /> },
                   { label: 'Day Book',              path: '/billing/daybook',          entity: 'reports_daybook' as any,       icon: <FileText className="h-4 w-4" /> },

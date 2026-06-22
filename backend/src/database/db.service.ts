@@ -77,6 +77,44 @@ export class DbService implements OnModuleInit {
         KEY \`idx_customer_ip\` (\`customer_ip\`),
         KEY \`idx_event_at\`    (\`event_at\`)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+      `CREATE TABLE IF NOT EXISTS \`tdl_expiry_records\` (
+        \`id\`                    INT           NOT NULL AUTO_INCREMENT,
+        \`customer_name\`         VARCHAR(255)  NOT NULL,
+        \`tdl_name\`              VARCHAR(255)  NOT NULL,
+        \`first_activation_date\` DATE          DEFAULT NULL,
+        \`total_amount\`          DECIMAL(12,2) NOT NULL DEFAULT 0,
+        \`amc_amount\`            DECIMAL(12,2) NOT NULL DEFAULT 0,
+        \`billing_cycle\`         ENUM('monthly','quarterly','half_yearly','yearly') NOT NULL DEFAULT 'yearly',
+        \`start_date\`            DATE          DEFAULT NULL,
+        \`remark\`                TEXT          DEFAULT NULL,
+        \`expiry_date\`           DATE          DEFAULT NULL,
+        \`texpiry\`               DATE          DEFAULT NULL,
+        \`release_version\`       VARCHAR(100)  DEFAULT NULL,
+        \`token\`                 VARCHAR(64)   NOT NULL,
+        \`is_active\`             TINYINT(1)    NOT NULL DEFAULT 1,
+        \`created_at\`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`uq_token\` (\`token\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+      `CREATE TABLE IF NOT EXISTS \`tdl_billing_activities\` (
+        \`id\`            INT           NOT NULL AUTO_INCREMENT,
+        \`tdl_expiry_id\` INT           NOT NULL,
+        \`customer_name\` VARCHAR(255)  NOT NULL,
+        \`tdl_name\`      VARCHAR(255)  NOT NULL,
+        \`type\`          ENUM('new','renew') NOT NULL,
+        \`cycle\`         ENUM('monthly','quarterly','half_yearly','yearly') NOT NULL,
+        \`amc_amount\`    DECIMAL(12,2) NOT NULL DEFAULT 0,
+        \`total_amount\`  DECIMAL(12,2) NOT NULL DEFAULT 0,
+        \`start_date\`    DATE          DEFAULT NULL,
+        \`expiry_date\`   DATE          DEFAULT NULL,
+        \`notes\`         TEXT          DEFAULT NULL,
+        \`created_at\`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        KEY \`idx_tdl_expiry_id\` (\`tdl_expiry_id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     ];
 
     const conn = await this.pool.getConnection();

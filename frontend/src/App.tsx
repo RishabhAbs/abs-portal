@@ -223,6 +223,7 @@ function App() {
                 <Route path="reports">
                   <Route index element={<Navigate to="outstanding" replace />} />
                   <Route path="outstanding" element={<PermissionGuard entity="reports_outstanding"><OutstandingReport /></PermissionGuard>} />
+                  <Route path="outstanding/:side" element={<PermissionGuard entity="reports_outstanding"><OutstandingReport /></PermissionGuard>} />
                   <Route path="ledger" element={<PermissionGuard entity="reports_ledger"><LedgerReport /></PermissionGuard>} />
                   <Route path="sales-register" element={<PermissionGuard entity={['reports_sales_register', 'reports_daybook']}><SalesRegister /></PermissionGuard>} />
                   <Route path="group-summary" element={<PermissionGuard entity={['reports_group_summary', 'reports_daybook']}><GroupSummary /></PermissionGuard>} />

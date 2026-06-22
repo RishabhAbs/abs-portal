@@ -540,10 +540,13 @@ export class TallyService implements OnModuleInit {
             `SELECT v.id, v.vch_no, v.vch_date, v.amount, v.remark,
                     v.created_by, v.created_at, v.tally_synced_at,
                     c.company AS party_name, c.gstin AS party_gstin,
+                    c.address1, c.address2, c.city, c.pincode, s.name AS state_name,
                     COALESCE(p.name, vt.name) AS vch_type,
                     vt.name AS vch_subtype
              FROM vch_details v
              LEFT JOIN customer c  ON v.party_ledger_id = c.id
+             LEFT JOIN pincode pv  ON c.pincode = pv.pincode
+             LEFT JOIN state s     ON pv.stateid = s.id
              LEFT JOIN vchtype vt  ON v.vch_type_id = vt.id
              LEFT JOIN vchtype p   ON vt.parent_id = p.id AND vt.parent_id != vt.id
              ${whereSql}
@@ -559,18 +562,20 @@ export class TallyService implements OnModuleInit {
         const vchIds = vouchers.map((v: any) => v.id);
         const ph = vchIds.map(() => '?').join(',');
 
+        // ledger_entries.amount sign: positive = Dr, negative = Cr (Tally convention)
         const ledgerEntries = await this.db.query<any>(
-            `SELECT le.vch_id, le.amount, c.company AS ledger_name
+            `SELECT le.id, le.vch_id, le.amount, c.company AS ledger_name, lg.name AS ledger_group
              FROM ledger_entries le
              LEFT JOIN customer c ON le.ledger_id = c.id
+             LEFT JOIN ledgergroup lg ON c.ledgergroup = lg.id
              WHERE le.vch_id IN (${ph})
              ORDER BY le.vch_id, le.id`,
             vchIds,
         );
-
         const invEntries = await this.db.query<any>(
-            `SELECT le.vch_id, ie.qty, ie.rate, ie.amount, ie.gst_rate,
-                    i.item_name, ig.name AS item_group
+            `SELECT ie.id, le.vch_id, ie.led_id, ie.qty, ie.rate, ie.amount,
+                    i.item_name, i.hsn, ig.name AS item_group,
+                    COALESCE(i.gst, ie.gst_rate, 0) AS gst_rate
              FROM inventory_entries ie
              INNER JOIN ledger_entries le ON ie.led_id = le.id
              INNER JOIN items i           ON ie.item_id = i.id
@@ -579,25 +584,72 @@ export class TallyService implements OnModuleInit {
              ORDER BY le.vch_id, ie.id`,
             vchIds,
         );
+        const invIds = invEntries.map((ie: any) => ie.id);
 
-        const ledByVch = new Map<number, any[]>();
-        for (const le of ledgerEntries) {
-            const arr = ledByVch.get(le.vch_id) || [];
-            arr.push({ ledger_name: le.ledger_name || null, amount: +Number(le.amount).toFixed(2) });
-            ledByVch.set(le.vch_id, arr);
+        const batchRows = invIds.length === 0 ? [] : await this.db.query<any>(
+            `SELECT inventory_id, batch_name, qty, rate, amount
+             FROM batch WHERE inventory_id IN (${invIds.map(() => '?').join(',')})
+             ORDER BY inventory_id, id`,
+            invIds,
+        );
+
+        const billAllocs = await this.db.query<any>(
+            `SELECT vchid, billname, amount FROM bill_allocation WHERE vchid IN (${ph}) ORDER BY vchid, id`,
+            vchIds,
+        );
+
+        const batchByInv = new Map<number, any[]>();
+        for (const b of batchRows) {
+            const arr = batchByInv.get(b.inventory_id) || [];
+            arr.push({
+                batch_name: b.batch_name || null,
+                qty:        +Number(b.qty).toFixed(3),
+                rate:       +Number(b.rate).toFixed(2),
+                amount:     +Number(b.amount).toFixed(2),
+            });
+            batchByInv.set(b.inventory_id, arr);
         }
-        const invByVch = new Map<number, any[]>();
+
+        const invByLed = new Map<number, any[]>();
         for (const ie of invEntries) {
-            const arr = invByVch.get(ie.vch_id) || [];
+            const arr = invByLed.get(ie.led_id) || [];
             arr.push({
                 item_name:  ie.item_name,
                 item_group: ie.item_group || null,
+                hsn:        ie.hsn || null,
                 qty:        +Number(ie.qty).toFixed(3),
                 rate:       +Number(ie.rate).toFixed(2),
                 amount:     +Number(ie.amount).toFixed(2),
                 gst_rate:   +Number(ie.gst_rate || 0).toFixed(2),
+                batches:    batchByInv.get(ie.id) || [],
             });
-            invByVch.set(ie.vch_id, arr);
+            invByLed.set(ie.led_id, arr);
+        }
+
+        const ledByVch = new Map<number, any[]>();
+        for (const le of ledgerEntries) {
+            const arr = ledByVch.get(le.vch_id) || [];
+            const amt = Number(le.amount);
+            arr.push({
+                ledger_name:  le.ledger_name || null,
+                ledger_group: le.ledger_group || null,
+                amount:       +Math.abs(amt).toFixed(2),
+                direction:    amt >= 0 ? 'Dr' : 'Cr',
+                inventory:    invByLed.get(le.id) || [],
+            });
+            ledByVch.set(le.vch_id, arr);
+        }
+
+        const billByVch = new Map<number, any[]>();
+        for (const ba of billAllocs) {
+            const arr = billByVch.get(ba.vchid) || [];
+            const amt = Number(ba.amount);
+            arr.push({
+                billname:  ba.billname || null,
+                amount:    +Math.abs(amt).toFixed(2),
+                direction: amt >= 0 ? 'Dr' : 'Cr',
+            });
+            billByVch.set(ba.vchid, arr);
         }
 
         const result = vouchers.map((v: any) => ({
@@ -608,12 +660,19 @@ export class TallyService implements OnModuleInit {
             vch_subtype:      v.vch_subtype || null,
             party_name:       v.party_name || null,
             party_gstin:      v.party_gstin || null,
+            party_address: {
+                address1: v.address1 || null,
+                address2: v.address2 || null,
+                city:     v.city || null,
+                state:    v.state_name || null,
+                pincode:  v.pincode || null,
+            },
             amount:           +Number(v.amount).toFixed(2),
             remark:           v.remark || null,
             created_at:       v.created_at,
             tally_synced_at:  v.tally_synced_at || null,
             ledger_entries:   ledByVch.get(v.id) || [],
-            inventory_entries: invByVch.get(v.id) || [],
+            bill_allocations: billByVch.get(v.id) || [],
         }));
 
         return { total: Number(countRow?.total) || 0, page, limit, vouchers: result };

@@ -123,10 +123,8 @@ const DEFAULT_BANK: BankAccount = {
   qr_image:       '',
 };
 const DEFAULT_TERMS = [
-  'Payment of bill must be made within 15 Days.',
-  'Subject to Guwahati Jurisdiction.',
+  'Payment of bill must be made within 7 Days.',
   'Services once activated are non-refundable.',
-  'This is a computer generated invoice and does not require physical signature.',
 ];
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -136,6 +134,11 @@ function loadJson<T>(key: string, fallback: T): T {
   } catch { /* ignore */ }
   return fallback;
 }
+const RETIRED_TERMS = new Set([
+  'Subject to Guwahati Jurisdiction.',
+  'This is a computer generated invoice and does not require physical signature.',
+]);
+
 function loadList<T>(key: string, fallback: T[]): T[] {
   try {
     const raw = localStorage.getItem(key);
@@ -143,11 +146,15 @@ function loadList<T>(key: string, fallback: T[]): T[] {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length) {
         // Migrate old default bank UPI ID if still set to the old value
-        return parsed.map((item: any) =>
+        let result = parsed.map((item: any) =>
           item.id === 'default' && item.upi_id === 'abstechnologies@hdfcbank'
             ? { ...item, upi_id: 'Vyapar.176885158996@hdfcbank' }
             : item
-        ) as T[];
+        );
+        // Those two lines now render as their own footer text below the
+        // signature block, so strip them out of any previously-saved terms list.
+        if (key === TERMS_KEY) result = result.filter((t: any) => !RETIRED_TERMS.has(t));
+        return (result.length ? result : fallback) as T[];
       }
     }
   } catch { /* ignore */ }
@@ -406,7 +413,7 @@ export default function PrintVoucher() {
     const filename = `Invoice-${voucher.vch_no || voucher.id}.pdf`;
     html2pdf()
       .set({
-        margin: 10,
+        margin: 0,
         filename,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true, logging: false },
@@ -1031,7 +1038,7 @@ function InvoicePreview({
         }
       `}</style>
 
-      <div className="shadow-sm border border-slate-200 print:border-0 print:shadow-none p-8 print:p-0">
+      <div className="shadow-sm border border-slate-200 print:border-0 print:shadow-none px-4 py-8 print:p-0">
         {/* Header */}
         <div className="flex items-start gap-4 pb-4 border-b border-slate-200">
           {company.logo_url && (
@@ -1218,8 +1225,10 @@ function InvoicePreview({
           </div>
         </div>
 
-        <div className="text-center text-[11px] text-emerald-700 font-medium pt-3 mt-3 border-t border-slate-200">
-          ♥ Thank you for your business!
+        <div className="text-center pt-3 mt-3 border-t border-slate-200">
+          <div className="text-[11px] text-slate-600">Subject to Guwahati Jurisdiction.</div>
+          <div className="text-[11px] text-slate-600">This is a computer generated invoice and does not require physical signature.</div>
+          <div className="text-[11px] text-emerald-700 font-medium mt-1">♥ Thank you for your business!</div>
         </div>
       </div>
     </div>

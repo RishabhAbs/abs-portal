@@ -11,7 +11,12 @@ import { useToast } from '../components/Toast/Toast';
 const fmt = (n: any) =>
   Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const toInputDate = (d: Date) => d.toISOString().split('T')[0];
+const toInputDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 const displayDate = (s?: string | null) => {
   if (!s) return '—';
   const d = new Date(s);
