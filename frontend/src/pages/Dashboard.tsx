@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { authApi, attendanceApi, serviceCallsApi, dashboardApi, targetsApi, usersApi } from '../services/api';
+import { authApi, attendanceApi, serviceCallsApi, dashboardApi, targetsApi, usersApi, itemsApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import {
   Server, Building2, Link2, AlertCircle, Activity,
@@ -67,6 +67,8 @@ const Dashboard: React.FC = () => {
   // Targets (user-scoped): actuals + plans from my-performance, unit types from targets
   const [perf, setPerf] = useState<any>(null);
   const [targetUnitTypes, setTargetUnitTypes] = useState<Record<string, string>>({});
+  // Category-level unit override (item_categories.target_unit) — authoritative source
+  const [categoryUnits, setCategoryUnits] = useState<Record<string, string>>({});
   const fy = useMemo(() => currentFY(), []);
 
   // Admin target rollup (used to derive company-wide numbers into perfForUI)
@@ -96,6 +98,24 @@ const Dashboard: React.FC = () => {
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const staffFilter = admin ? '' : (user?.name || '');
+
+  useEffect(() => {
+    // Load item categories to get authoritative target_unit per category
+    itemsApi.getCategories().then(res => {
+      if (!res?.data) return;
+      const map: Record<string, string> = {};
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      for (const cat of res.data) {
+        // Match category name to TARGET_CATEGORIES key
+        const match = TARGET_CATEGORIES.find(t =>
+          normalize(cat.name) === normalize(t.label) ||
+          normalize(cat.name) === normalize(t.key)
+        );
+        if (match) map[match.key] = cat.target_unit === 'amount' ? 'amount' : 'qty';
+      }
+      setCategoryUnits(map);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     dashboardApi.getStats().then(res => { if (res?.data) setDashStats(res.data); }).catch(() => {});
@@ -257,23 +277,25 @@ const Dashboard: React.FC = () => {
   // When users in a category disagree on unit (qty vs amount), we pick whichever
   // is used by more plan-holders; default 'qty'.
   const unitsForUI = useMemo<Record<string, string>>(() => {
-    if (!admin) return targetUnitTypes;
-    const users: any[] = adminPerf?.users || [];
-    const keys = ['new_target','tss','cloud','tdl','app','visit','call'] as const;
-    const out: Record<string, string> = {};
-    for (const k of keys) {
-      let qty = 0, amt = 0;
+    // Defaults: voucher-item categories are amount-based; activity counts are qty-based
+    const base: Record<string, string> = {
+      tss: 'amount', cloud: 'amount', tdl: 'amount', app: 'amount',
+      new_target: 'qty', visit: 'qty', call: 'qty',
+    };
+    // Per-user or admin breakdown unit can still override (e.g. if a category was changed)
+    if (!admin) {
+      Object.assign(base, targetUnitTypes);
+    } else {
+      const users: any[] = adminPerf?.users || [];
       for (const u of users) {
-        const b = u?.breakdown?.[k];
-        if (!b) continue;
-        const hasPlan = (b.mtd?.plan || 0) + (b.qtd?.plan || 0) + (b.fy?.plan || 0) > 0;
-        if (!hasPlan) continue;
-        if (b.unit === 'amount') amt++; else qty++;
+        for (const k of Object.keys(u?.breakdown || {})) {
+          if (u.breakdown[k]?.unit) base[k] = u.breakdown[k].unit;
+        }
       }
-      out[k] = amt > qty ? 'amount' : 'qty';
     }
-    return out;
-  }, [admin, targetUnitTypes, adminPerf]);
+    // item_categories.target_unit is the final override
+    return { ...base, ...categoryUnits };
+  }, [admin, targetUnitTypes, adminPerf, categoryUnits]);
 
   // Read actual/plan from the active perf source; returns {actual, plan} per (category, period)
   const getAP = (catKey: string, period: 'mtd' | 'qtd' | 'fy') => {
@@ -336,7 +358,7 @@ const Dashboard: React.FC = () => {
     // Use the full viewport from lg+ (1024 px) so the 3-column dashboard
     // works on standard 1366 / 1440 laptops too. Mobile / tablet keep the
     // comfortable max-w-5xl reading width. Page padding shrinks at lg+.
-    <div className="space-y-3 max-w-5xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-3 pt-3 pb-10">
+    <div className="space-y-3 max-w-5xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-3 pt-3 pb-10 lg:space-y-0 lg:pb-3 lg:h-full lg:flex lg:flex-col lg:overflow-hidden">
 
       {/* Mobile tab bar — hidden on desktop */}
       {admin && (
@@ -361,17 +383,17 @@ const Dashboard: React.FC = () => {
 
       {/* Three-column dashboard from lg+ (1024 px) so 1366×768 / 1440×900
             laptops get the dense view too. Below lg everything stacks.
-            `items-start` keeps each column anchored to the top regardless
-            of how tall its siblings grow. */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 items-stretch">
+            On lg+ the grid fills the remaining viewport height exactly
+            (no page scroll) — each card scrolls its own body instead. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 items-stretch lg:flex-1 lg:min-h-0 lg:mt-3">
 
       {/* COL 1: Company Targets */}
-      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'company' ? 'block' : 'hidden') : 'block'} lg:block`}>
+      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'company' ? 'block' : 'hidden') : 'block'} lg:block lg:h-full`}>
 
       {/* Targets — same layout for everyone. For admin, numbers are the sum across
           all users; for regular users, they're personal actuals vs personal plans. */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1">
-        <div className="px-3 py-2 border-b border-gray-200 bg-violet-50/50 flex items-center justify-between gap-2 flex-wrap cursor-pointer select-none"
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 lg:flex lg:flex-col lg:h-full">
+        <div className="px-3 py-2 border-b border-gray-200 bg-violet-50/50 flex items-center justify-between gap-2 flex-wrap cursor-pointer select-none lg:flex-none"
           onClick={() => setSecCompany(v => !v)}>
           <div className="flex items-center gap-1.5 flex-wrap min-w-0" onClick={e => e.stopPropagation()}>
             <Target className="h-3.5 w-3.5 text-violet-600" />
@@ -401,7 +423,7 @@ const Dashboard: React.FC = () => {
             <ChevronRight className={`h-4 w-4 text-gray-400 transition-transform ${secCompany ? 'rotate-90' : ''}`} />
           </div>
         </div>
-        {(secCompany || !isDesktop()) && <div className="p-2.5 space-y-2">
+        {(secCompany || !isDesktop()) && <div className="p-2.5 space-y-2 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
           {TARGET_CATEGORIES.map(cat => {
             const unit = unitsForUI[cat.key] || 'qty';
             const todayVal = getToday(cat.key);
@@ -451,12 +473,14 @@ const Dashboard: React.FC = () => {
 
       </div>{/* /col 1 */}
 
-      {/* COL 2: Pending Work + Customer Snapshot */}
-      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'pending' || mobileTab === 'customer' ? 'flex' : 'hidden') : 'flex'} lg:flex`}>
+      {/* COL 2: Pending Work + Customer Snapshot — each takes exactly 50% of
+            the column's height on desktop, so the pair always fills col2
+            without spilling past the viewport. */}
+      <div className={`flex flex-col gap-2 min-h-0 ${admin ? (mobileTab === 'pending' || mobileTab === 'customer' ? 'flex' : 'hidden') : 'flex'} lg:flex lg:h-full`}>
 
       {/* Pending Work Table — inline */}
-      <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${admin ? (mobileTab === 'pending' ? 'block' : 'hidden') : 'block'} lg:block`}>
-          <div className="px-3 py-2 border-b border-gray-200 bg-amber-50/50 flex items-center gap-1.5 cursor-pointer select-none"
+      <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${admin ? (mobileTab === 'pending' ? 'block' : 'hidden') : 'block'} lg:block lg:basis-1/2 lg:flex lg:flex-col lg:min-h-0`}>
+          <div className="px-3 py-2 border-b border-gray-200 bg-amber-50/50 flex items-center gap-1.5 cursor-pointer select-none lg:flex-none"
             onClick={() => setSecPending(v => !v)}>
             <Clock className="h-3.5 w-3.5 text-amber-600" />
             <h3 className="font-semibold text-gray-900 text-sm">{admin ? 'Pending Work' : 'My Pending Work'}</h3>
@@ -465,9 +489,9 @@ const Dashboard: React.FC = () => {
             )}
             <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secPending ? 'rotate-90' : ''}`} />
           </div>
-          {(secPending || !isDesktop()) && <div className="overflow-x-auto">
+          {(secPending || !isDesktop()) && <div className="overflow-x-auto lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b border-gray-100">
+              <thead className="bg-gray-50 border-b border-gray-100 lg:sticky lg:top-0 lg:z-10">
                 <tr className="text-[10px] text-gray-500 uppercase">
                   {(admin || pendingUsers.length > 1) && <th className="px-2 py-1.5 text-left">User</th>}
                   <th className="px-2 py-1.5 text-center">Service</th>
@@ -573,21 +597,23 @@ const Dashboard: React.FC = () => {
 
       {/* Operations Snapshot — admin-only dense KPI grid. */}
       {admin && opsSnapshot && (
-        <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${mobileTab === 'customer' ? 'block' : 'hidden'} lg:block`}>
-          <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center gap-1.5 cursor-pointer select-none"
+        <div className={`bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 ${mobileTab === 'customer' ? 'block' : 'hidden'} lg:block lg:basis-1/2 lg:flex lg:flex-col lg:min-h-0`}>
+          <div className="px-3 py-2 border-b border-gray-200 bg-slate-50 flex items-center gap-1.5 cursor-pointer select-none lg:flex-none"
             onClick={() => setSecOps(v => !v)}>
             <Activity className="h-3.5 w-3.5 text-slate-600" />
             <h3 className="font-semibold text-gray-900 text-sm">Customer Snapshot</h3>
             <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${secOps ? 'rotate-90' : ''}`} />
           </div>
-          {(secOps || !isDesktop()) && <OperationsSnapshot data={opsSnapshot} headerless />}
+          {(secOps || !isDesktop()) && <div className="lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
+            <OperationsSnapshot data={opsSnapshot} headerless />
+          </div>}
         </div>
       )}
 
       </div>{/* /col 2 */}
 
       {/* COL 3: Team Attendance */}
-      <div className={`flex flex-col gap-2 min-h-0 ${mobileTab === 'team' ? 'flex' : 'hidden'} lg:flex`}>
+      <div className={`flex flex-col gap-2 min-h-0 ${mobileTab === 'team' ? 'flex' : 'hidden'} lg:flex lg:h-full`}>
         {admin && (
           <TeamAttendance expanded={secTeam || !isDesktop()} onToggle={() => setSecTeam(v => !v)} />
         )}
@@ -709,8 +735,8 @@ function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: (
   const isToday    = date === todayStr;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col">
-      <div className="px-3 py-2 border-b border-gray-200 bg-green-50/50 flex items-center gap-1.5 cursor-pointer select-none"
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col lg:h-full lg:min-h-0">
+      <div className="px-3 py-2 border-b border-gray-200 bg-green-50/50 flex items-center gap-1.5 cursor-pointer select-none lg:flex-none"
         onClick={onToggle}>
         <Users className="h-3.5 w-3.5 text-green-600" />
         <h3 className="font-semibold text-gray-900 text-sm">Team Attendance</h3>
@@ -724,8 +750,8 @@ function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: (
         <ChevronRight className={`h-4 w-4 text-gray-400 ml-auto transition-transform ${expanded ? 'rotate-90' : ''}`} />
       </div>
       {expanded && (
-        <div>
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50">
+        <div className="lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50 lg:flex-none">
             <label className="text-xs text-gray-500 font-medium">Date:</label>
             <input
               type="date"
@@ -742,14 +768,14 @@ function TeamAttendance({ expanded, onToggle }: { expanded: boolean; onToggle: (
             <button onClick={e => { e.stopPropagation(); setLoaded(false); }}
               className="ml-auto text-[10px] text-gray-400 hover:text-gray-600 underline">Refresh</button>
           </div>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
           {!loaded ? (
             <div className="text-center py-6 text-gray-400 text-sm">Loading...</div>
           ) : rows.length === 0 ? (
             <div className="text-center py-6 text-gray-400 text-sm">No attendance data for {isToday ? 'today' : date}</div>
           ) : (
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b border-gray-100">
+              <thead className="bg-gray-50 border-b border-gray-100 lg:sticky lg:top-0 lg:z-10">
                 <tr className="text-[10px] text-gray-500 uppercase">
                   <th className="px-3 py-1.5 text-left">User</th>
                   <th className="px-3 py-1.5 text-center">Check In</th>

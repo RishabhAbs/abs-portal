@@ -5,15 +5,20 @@ import { AppModule } from './app.module';
 import { getISTISOString } from './utils/date.util';
 import helmet from 'helmet';
 import * as compression from 'compression';
+import * as express from 'express';
+import { join } from 'path';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // SECURE: Add Security Headers
-  app.use(helmet());
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
   // PERFORMANCE: Enable Compression
   app.use(compression());
+
+  // Serve uploaded files (visit recordings, etc.) as public static assets
+  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
   // VALIDATION: Enable Global Pipes
   // VALIDATION: Enable Global Pipes

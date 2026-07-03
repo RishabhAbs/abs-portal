@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Calendar, Phone, Building2, User, Tag, Clock, ChevronLeft, ChevronRight, RefreshCw, AlertCircle, FileSpreadsheet, FileText, Copy } from 'lucide-react';
 import { tallyApi } from '../services/api';
@@ -78,7 +78,7 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
         return () => clearTimeout(timer);
     }, [search]);
 
-    const fetchReport = async () => {
+    const fetchReport = useCallback(async () => {
         setLoading(true);
         try {
             const response = await tallyApi.getExpiryReport({
@@ -92,19 +92,18 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
             });
             setData(response.data);
             setTotal(response.total);
-            setAllCount(response.allCount || response.total); // Fallback to total if allCount not provided
+            setAllCount(response.allCount || response.total);
             setStatusCounts(response.statusCounts);
-
         } catch (error: any) {
             showError('Error', error.message || 'Failed to fetch report');
         } finally {
             setLoading(false);
         }
-    };
+    }, [customerType, activeStatus, activeSearch, page, limit, dateFrom, dateTo, showError]);
 
     useEffect(() => {
         fetchReport();
-    }, [customerType, activeStatus, page, activeSearch]);
+    }, [fetchReport]);
 
     // Auto-sync stale serials with the Tally API in the background, then refetch.
     // "Stale" = never checked OR checked more than 7 days ago. Limited to 10 per page
@@ -137,8 +136,7 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                 } catch { /* ignore individual failures */ }
             }
             setAutoSyncing(false);
-            // Refresh once all synced
-            fetchReport();
+            // Do NOT auto-refetch — user can manually refresh
         })();
     }, [loading, data, customerType, activeStatus, page, activeSearch]);
 
@@ -146,7 +144,6 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
         if (e) e.preventDefault();
         setPage(1);
         setActiveSearch(search);
-        fetchReport();
     };
 
     const copyToClipboard = (text: string, label: string) => {
@@ -291,6 +288,13 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                                 className="px-4 py-1.5 bg-green-600 text-white rounded text-[12px] md:text-[13px] font-bold hover:bg-green-700 transition-colors shadow-sm"
                             >
                                 Update
+                            </button>
+                            <button
+                                onClick={() => fetchReport()}
+                                className="p-1.5 border border-gray-300 rounded hover:bg-gray-100 transition-colors text-gray-500"
+                                title="Refresh"
+                            >
+                                <RefreshCw size={14} />
                             </button>
                         </div>
 
@@ -454,7 +458,7 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                             >
                                 <ChevronLeft className="h-4 w-4" />
                             </button>
-                            <span className="text-[13px] font-bold px-3">Page 1 of {Math.ceil(total / limit) || 1}</span>
+                            <span className="text-[13px] font-bold px-3">Page {page} of {Math.ceil(total / limit) || 1}</span>
                             <button
                                 onClick={() => setPage(p => (p * limit < total ? p + 1 : p))}
                                 disabled={page * limit >= total}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  RefreshCw, Search, X, Printer, ChevronRight as ArrowRight,
+  RefreshCw, Search, X, Printer, ChevronRight as ArrowRight, Download,
 } from 'lucide-react';
 import { vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
@@ -63,7 +63,7 @@ export default function GroupSummary() {
   const [search, setSearch]     = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showControls, setShowControls] = useState(false);
-  const [hideZero, setHideZero] = useState(false);
+  const [hideZero, setHideZero] = useState(true);
   const [loading, setLoading]   = useState(false);
   const [printing, setPrinting] = useState(false);
 
@@ -188,6 +188,29 @@ export default function GroupSummary() {
     setTimeout(() => window.print(), 50);
   };
 
+  const handleExcel = () => {
+    if (filtered.length === 0) return;
+    const currentName = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1].name : 'Group Summary';
+    const headers = ['Particulars', 'Opening Balance', 'Debit', 'Credit', 'Closing Balance'];
+    const dataRows = filtered.map(r => [
+      r.name,
+      r.opening ? fmt(Math.abs(r.opening)) + (r.opening > 0 ? ' Dr' : ' Cr') : '—',
+      r.debit ? fmt(r.debit) : '—',
+      r.credit ? fmt(r.credit) : '—',
+      r.closing ? fmt(Math.abs(r.closing)) + (r.closing > 0 ? ' Dr' : ' Cr') : '—',
+    ]);
+    const csvContent = [headers, ...dataRows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentName}_${dateFrom}_to_${dateTo}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const cell    = 'border border-slate-300 px-2.5 py-1.5 text-[13px] leading-snug';
   const cellNum = `${cell} text-right tabular-nums whitespace-nowrap`;
   const headTh  = 'border border-slate-400 bg-slate-200 px-2.5 py-1.5 text-[13px] font-bold text-slate-700 uppercase tracking-wide sticky top-0 z-10';
@@ -230,6 +253,10 @@ export default function GroupSummary() {
           <button onClick={() => setShowControls(v => !v)}
             className={`p-2 rounded-lg transition-colors ${showControls ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
             <Search size={18} />
+          </button>
+          <button onClick={handleExcel} disabled={filtered.length === 0} title="Export to Excel"
+            className="p-2 rounded-lg text-green-600 hover:bg-green-50 disabled:opacity-40">
+            <Download size={16} />
           </button>
           <button onClick={handlePrint} disabled={rows.length === 0}
             className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-40">

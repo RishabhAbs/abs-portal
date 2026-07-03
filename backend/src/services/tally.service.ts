@@ -564,7 +564,7 @@ export class TallyService implements OnModuleInit {
 
         // ledger_entries.amount sign: positive = Dr, negative = Cr (Tally convention)
         const ledgerEntries = await this.db.query<any>(
-            `SELECT le.id, le.vch_id, le.amount, c.company AS ledger_name, lg.name AS ledger_group
+            `SELECT le.id, le.vch_id, le.ledger_id, le.amount, c.company AS ledger_name, lg.name AS ledger_group
              FROM ledger_entries le
              LEFT JOIN customer c ON le.ledger_id = c.id
              LEFT JOIN ledgergroup lg ON c.ledgergroup = lg.id
@@ -594,7 +594,8 @@ export class TallyService implements OnModuleInit {
         );
 
         const billAllocs = await this.db.query<any>(
-            `SELECT vchid, billname, amount FROM bill_allocation WHERE vchid IN (${ph}) ORDER BY vchid, id`,
+            `SELECT ba.vchid, ba.ledentry_id, ba.ledger, ba.billname, ba.amount
+             FROM bill_allocation ba WHERE ba.vchid IN (${ph}) ORDER BY ba.vchid, ba.id`,
             vchIds,
         );
 
@@ -626,30 +627,47 @@ export class TallyService implements OnModuleInit {
             invByLed.set(ie.led_id, arr);
         }
 
+        // Group bill allocations by ledentry_id (primary key link to ledger_entries.id).
+        // Also build a fallback map by (vchid, ledger) for rows where ledentry_id is NULL
+        // (older vouchers created before per-row bill allocation was introduced).
+        const billByLedEntry = new Map<number, any[]>();
+        const billByVchLedger = new Map<string, any[]>();
+        for (const ba of billAllocs) {
+            const amt = Number(ba.amount);
+            const entry = {
+                billname:  ba.billname || null,
+                amount:    +Math.abs(amt).toFixed(2),
+                direction: amt >= 0 ? 'Dr' : 'Cr',
+            };
+            if (ba.ledentry_id) {
+                const arr = billByLedEntry.get(ba.ledentry_id) || [];
+                arr.push(entry);
+                billByLedEntry.set(ba.ledentry_id, arr);
+            } else if (ba.ledger) {
+                const key = `${ba.vchid}:${ba.ledger}`;
+                const arr = billByVchLedger.get(key) || [];
+                arr.push(entry);
+                billByVchLedger.set(key, arr);
+            }
+        }
+
         const ledByVch = new Map<number, any[]>();
         for (const le of ledgerEntries) {
             const arr = ledByVch.get(le.vch_id) || [];
             const amt = Number(le.amount);
+            // Resolve bill allocations: prefer ledentry_id match, fall back to vchid+ledger_id
+            const bills = billByLedEntry.get(le.id)
+                || billByVchLedger.get(`${le.vch_id}:${le.ledger_id}`)
+                || [];
             arr.push({
-                ledger_name:  le.ledger_name || null,
-                ledger_group: le.ledger_group || null,
-                amount:       +Math.abs(amt).toFixed(2),
-                direction:    amt >= 0 ? 'Dr' : 'Cr',
-                inventory:    invByLed.get(le.id) || [],
+                ledger_name:      le.ledger_name || null,
+                ledger_group:     le.ledger_group || null,
+                amount:           +Math.abs(amt).toFixed(2),
+                direction:        amt >= 0 ? 'Dr' : 'Cr',
+                inventory:        invByLed.get(le.id) || [],
+                bill_allocations: bills,
             });
             ledByVch.set(le.vch_id, arr);
-        }
-
-        const billByVch = new Map<number, any[]>();
-        for (const ba of billAllocs) {
-            const arr = billByVch.get(ba.vchid) || [];
-            const amt = Number(ba.amount);
-            arr.push({
-                billname:  ba.billname || null,
-                amount:    +Math.abs(amt).toFixed(2),
-                direction: amt >= 0 ? 'Dr' : 'Cr',
-            });
-            billByVch.set(ba.vchid, arr);
         }
 
         const result = vouchers.map((v: any) => ({
@@ -672,7 +690,6 @@ export class TallyService implements OnModuleInit {
             created_at:       v.created_at,
             tally_synced_at:  v.tally_synced_at || null,
             ledger_entries:   ledByVch.get(v.id) || [],
-            bill_allocations: billByVch.get(v.id) || [],
         }));
 
         return { total: Number(countRow?.total) || 0, page, limit, vouchers: result };

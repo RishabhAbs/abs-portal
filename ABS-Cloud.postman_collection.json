@@ -1,0 +1,1450 @@
+{
+  "info": {
+    "name": "ABS Cloud API — Complete",
+    "description": "Full API collection for ABS Cloud backend (NestJS, port 5000).\n\n**Setup:**\n1. Import this collection.\n2. Set collection variable `base_url` = `http://localhost:5000`.\n3. Call `POST /api/auth/login` → copy the token → set `jwt_token` variable.\n4. All JWT-authenticated requests use `Authorization: Bearer {{jwt_token}}` automatically.\n\n**Tally Sync endpoints** use `x-tally-key: {{tally_key}}` instead of JWT. Default key: `abs-tally-2024`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "abs-cloud-complete-collection"
+  },
+  "variable": [
+    { "key": "base_url",   "value": "http://localhost:5000" },
+    { "key": "jwt_token",  "value": "" },
+    { "key": "tally_key",  "value": "abs-tally-2024" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{jwt_token}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/health", "host": ["{{base_url}}"], "path": ["api","auth","health"] },
+            "description": "DB-independent health check. No auth required."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var r = pm.response.json();",
+                  "if (r && r.access_token) {",
+                  "  pm.collectionVariables.set('jwt_token', r.access_token);",
+                  "  console.log('Token saved to jwt_token variable');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"yourpassword\"\n}" },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api","auth","login"] },
+            "description": "Returns JWT access_token. The test script auto-saves it to {{jwt_token}}."
+          }
+        },
+        {
+          "name": "Get Current User (me)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/me", "host": ["{{base_url}}"], "path": ["api","auth","me"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/auth/logout", "host": ["{{base_url}}"], "path": ["api","auth","logout"] }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"currentPass\": \"oldpassword\",\n  \"newPass\": \"newpassword\",\n  \"otp\": \"123456\"\n}" },
+            "url": { "raw": "{{base_url}}/api/auth/profile/password", "host": ["{{base_url}}"], "path": ["api","auth","profile","password"] }
+          }
+        },
+        {
+          "name": "Get Active Sessions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/sessions/active", "host": ["{{base_url}}"], "path": ["api","auth","sessions","active"] }
+          }
+        },
+        {
+          "name": "Unlock Session (2FA)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"otp\": \"123456\"\n}" },
+            "url": { "raw": "{{base_url}}/api/auth/session/unlock", "host": ["{{base_url}}"], "path": ["api","auth","session","unlock"] }
+          }
+        },
+        {
+          "name": "Generate 2FA Secret",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/auth/2fa/generate", "host": ["{{base_url}}"], "path": ["api","auth","2fa","generate"] }
+          }
+        },
+        {
+          "name": "Enable 2FA",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"123456\",\n  \"secret\": \"BASE32SECRET\"\n}" },
+            "url": { "raw": "{{base_url}}/api/auth/2fa/enable", "host": ["{{base_url}}"], "path": ["api","auth","2fa","enable"] }
+          }
+        },
+        {
+          "name": "Disable 2FA",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/auth/2fa/disable", "host": ["{{base_url}}"], "path": ["api","auth","2fa","disable"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Tally Sync (x-tally-key)",
+      "description": "These endpoints use x-tally-key header, NOT JWT. Tally calls these to pull and acknowledge vouchers.\n\nNew response format: bill_allocations are nested inside each ledger_entry row (not a flat top-level array).\n\nLedger entry shape:\n{\n  ledger_name, ledger_group, amount, direction, inventory: [],\n  bill_allocations: [{ billname, amount, direction }]\n}",
+      "item": [
+        {
+          "name": "Get Unsynced Vouchers",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
+              "host": ["{{base_url}}"], "path": ["api","tally-sync","vouchers"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "100" },
+                { "key": "date_from", "value": "2026-04-01", "disabled": true },
+                { "key": "date_to",   "value": "2026-06-30", "disabled": true },
+                { "key": "vch_type",  "value": "Sales",      "disabled": true },
+                { "key": "include_all", "value": "1",        "disabled": true }
+              ]
+            },
+            "description": "Returns vouchers where tally_synced_at IS NULL. Paginated, max limit 500.\n\nEach voucher has ledger_entries[]. Each entry now contains its own bill_allocations[] — no more top-level bill_allocations array."
+          }
+        },
+        {
+          "name": "Get All Vouchers (include_all=1)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100&include_all=1",
+              "host": ["{{base_url}}"], "path": ["api","tally-sync","vouchers"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "100" },
+                { "key": "include_all", "value": "1" }
+              ]
+            },
+            "description": "Includes already-acknowledged vouchers. Use for re-import or auditing."
+          }
+        },
+        {
+          "name": "Get Vouchers By Date Range",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?date_from=2026-04-01&date_to=2026-06-30&page=1&limit=200",
+              "host": ["{{base_url}}"], "path": ["api","tally-sync","vouchers"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" },
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "200" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Vouchers By Type",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?vch_type=Payment&page=1&limit=100",
+              "host": ["{{base_url}}"], "path": ["api","tally-sync","vouchers"],
+              "query": [
+                { "key": "vch_type", "value": "Payment", "description": "Sales | Purchase | Payment | Receipt | Journal | Contra" },
+                { "key": "page",     "value": "1" },
+                { "key": "limit",    "value": "100" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Acknowledge Synced Vouchers",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "x-tally-key", "value": "{{tally_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"ids\": [1, 2, 3]\n}" },
+            "url": { "raw": "{{base_url}}/api/tally-sync/acknowledge", "host": ["{{base_url}}"], "path": ["api","tally-sync","acknowledge"] },
+            "description": "Stamps tally_synced_at on the given IDs. Idempotent — safe to call multiple times. response.acknowledged = count of newly stamped rows."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Vouchers",
+      "item": [
+        {
+          "name": "List Vouchers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","vouchers"],
+              "query": [
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "20" },
+                { "key": "vch_type",  "value": "Sales",      "disabled": true },
+                { "key": "search",    "value": "",           "disabled": true },
+                { "key": "date_from", "value": "2026-04-01", "disabled": true },
+                { "key": "date_to",   "value": "2026-06-30", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Voucher by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/vouchers/1", "host": ["{{base_url}}"], "path": ["api","vouchers","1"] }
+          }
+        },
+        {
+          "name": "Create Voucher — Sales (Items)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vch_type_id\": 1,\n  \"vch_no\": \"SAL-001\",\n  \"vch_date\": \"2026-06-22\",\n  \"party_ledger_id\": 10,\n  \"remark\": \"June sale\",\n  \"items\": [\n    { \"item_id\": 5, \"qty\": 2, \"rate\": 1500, \"amount\": 3000, \"gst_rate\": 18 }\n  ],\n  \"ledgers\": [],\n  \"bill_allocation\": [\n    { \"type\": \"New\", \"refno\": \"SAL-001\", \"amount\": 3540, \"direction\": \"Dr\" }\n  ]\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/vouchers", "host": ["{{base_url}}"], "path": ["api","vouchers"] }
+          }
+        },
+        {
+          "name": "Create Voucher — Journal / Contra / Payment / Receipt",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vch_type_id\": 4,\n  \"vch_no\": \"JNL-001\",\n  \"vch_date\": \"2026-06-22\",\n  \"party_ledger_id\": 10,\n  \"remark\": \"Journal entry\",\n  \"ledgers\": [\n    { \"ledger_id\": 10, \"amount\": 5000 },\n    { \"ledger_id\": 20, \"amount\": -5000 }\n  ],\n  \"bill_allocation\": [\n    { \"type\": \"New\", \"refno\": \"JNL-001\", \"amount\": 5000, \"direction\": \"Dr\", \"ledger_id\": 10 },\n    { \"type\": \"Agr.\", \"refno\": \"SAL-001\", \"amount\": 5000, \"direction\": \"Cr\", \"ledger_id\": 20 }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/api/vouchers", "host": ["{{base_url}}"], "path": ["api","vouchers"] },
+            "description": "Per-row bill_allocation: each entry has ledger_id matching the ledger_entries row it belongs to. Multiple ledgers can each be bill-by-bill."
+          }
+        },
+        {
+          "name": "Update Voucher",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"vch_date\": \"2026-06-22\",\n  \"remark\": \"Updated remark\"\n}" },
+            "url": { "raw": "{{base_url}}/api/vouchers/1", "host": ["{{base_url}}"], "path": ["api","vouchers","1"] }
+          }
+        },
+        {
+          "name": "Delete Voucher",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/vouchers/1", "host": ["{{base_url}}"], "path": ["api","vouchers","1"] }
+          }
+        },
+        {
+          "name": "Mark Checked",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/vouchers/1/check", "host": ["{{base_url}}"], "path": ["api","vouchers","1","check"] }
+          }
+        },
+        {
+          "name": "Mark Unchecked (Admin)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/vouchers/1/uncheck", "host": ["{{base_url}}"], "path": ["api","vouchers","1","uncheck"] }
+          }
+        },
+        {
+          "name": "Get Next Voucher Number",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/next-no?vch_type_id=1",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","next-no"],
+              "query": [{ "key": "vch_type_id", "value": "1" }]
+            }
+          }
+        },
+        {
+          "name": "Get Pending Bill Refs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/pending-refs?customer_id=10&direction=Cr",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","pending-refs"],
+              "query": [
+                { "key": "customer_id", "value": "10" },
+                { "key": "direction",   "value": "Cr", "description": "Dr or Cr" },
+                { "key": "exclude_vch_id", "value": "5", "disabled": true }
+              ]
+            },
+            "description": "Returns outstanding bill refs for a ledger. Used to populate bill allocation dropdowns."
+          }
+        },
+        {
+          "name": "Get Customer Serials",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/serials?customer_id=10",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","serials"],
+              "query": [
+                { "key": "customer_id", "value": "10" },
+                { "key": "flavour_id",  "value": "2", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Voucher Reports",
+      "item": [
+        {
+          "name": "Daybook",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/daybook?date=2026-06-22",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","daybook"],
+              "query": [
+                { "key": "date",      "value": "2026-06-22" },
+                { "key": "date_from", "value": "2026-06-01", "disabled": true },
+                { "key": "date_to",   "value": "2026-06-22", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sales Register",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/sales-register?date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","sales-register"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" },
+                { "key": "search",    "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sales Register Monthly",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/sales-register/monthly?date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","sales-register","monthly"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Outstanding",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/outstanding?as_of=2026-06-22",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","outstanding"],
+              "query": [
+                { "key": "as_of",     "value": "2026-06-22" },
+                { "key": "date_from", "value": "2026-04-01", "disabled": true },
+                { "key": "date_to",   "value": "2026-06-30", "disabled": true },
+                { "key": "bill_name", "value": "",           "disabled": true },
+                { "key": "search",    "value": "",           "disabled": true },
+                { "key": "side",      "value": "Dr",         "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "User-wise Outstanding",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/user-wise-outstanding?as_of=2026-06-22",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","user-wise-outstanding"],
+              "query": [
+                { "key": "as_of",  "value": "2026-06-22" },
+                { "key": "search", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ledger Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/ledger?ledger_id=10&date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","ledger"],
+              "query": [
+                { "key": "ledger_id", "value": "10" },
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" },
+                { "key": "search",    "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Group Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/group-summary?date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","group-summary"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" },
+                { "key": "search",    "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Group Summary — Ledger Drill-down",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/group-summary/5/ledgers?date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","group-summary","5","ledgers"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stock Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/vouchers/stock-summary?date_from=2026-04-01&date_to=2026-06-30",
+              "host": ["{{base_url}}"], "path": ["api","vouchers","stock-summary"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to",   "value": "2026-06-30" },
+                { "key": "search",    "value": "", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Customers",
+      "item": [
+        {
+          "name": "List Customers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/customers?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","customers"],
+              "query": [
+                { "key": "page",   "value": "1" },
+                { "key": "limit",  "value": "20" },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "status", "value": "Active", "disabled": true },
+                { "key": "city",   "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Customer by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/customers/1", "host": ["{{base_url}}"], "path": ["api","customers","1"] }
+          }
+        },
+        {
+          "name": "Ledger Search (all ledgers)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/customers/ledger-search?q=cash",
+              "host": ["{{base_url}}"], "path": ["api","customers","ledger-search"],
+              "query": [{ "key": "q", "value": "cash" }]
+            },
+            "description": "Searches both customers and other-ledgers. Used in voucher ledger picker."
+          }
+        },
+        {
+          "name": "Autocomplete",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/customers/autocomplete?q=enter",
+              "host": ["{{base_url}}"], "path": ["api","customers","autocomplete"],
+              "query": [{ "key": "q", "value": "enter" }]
+            }
+          }
+        },
+        {
+          "name": "Dropdown",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/customers/dropdown", "host": ["{{base_url}}"], "path": ["api","customers","dropdown"] }
+          }
+        },
+        {
+          "name": "Create Customer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company\": \"New Customer Ltd\",\n  \"contact_person\": \"John Doe\",\n  \"phone_no\": \"9999999999\",\n  \"email\": \"john@example.com\",\n  \"city\": \"Mumbai\",\n  \"status\": \"Active\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/customers", "host": ["{{base_url}}"], "path": ["api","customers"] }
+          }
+        },
+        {
+          "name": "Update Customer",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"city\": \"Delhi\",\n  \"status\": \"Active\"\n}" },
+            "url": { "raw": "{{base_url}}/api/customers/1", "host": ["{{base_url}}"], "path": ["api","customers","1"] }
+          }
+        },
+        {
+          "name": "Delete Customer",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/customers/1", "host": ["{{base_url}}"], "path": ["api","customers","1"] }
+          }
+        },
+        {
+          "name": "Get Opening Bills",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/customers/1/opening-bills", "host": ["{{base_url}}"], "path": ["api","customers","1","opening-bills"] }
+          }
+        },
+        {
+          "name": "Save Opening Bills",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bills\": [\n    { \"bill_name\": \"OP-001\", \"bill_date\": \"2026-04-01\", \"amount\": 5000, \"ref_type\": \"Dr\" }\n  ]\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/customers/1/opening-bills", "host": ["{{base_url}}"], "path": ["api","customers","1","opening-bills"] }
+          }
+        },
+        {
+          "name": "Get Customer History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/customers/1/history?type=call&page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","customers","1","history"],
+              "query": [
+                { "key": "type",  "value": "call", "description": "call | visit | service" },
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Inactive Customers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/customers/inactive?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","customers","inactive"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "search", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reactivate Customer",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/customers/1/reactivate", "host": ["{{base_url}}"], "path": ["api","customers","1","reactivate"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Other Ledgers",
+      "item": [
+        {
+          "name": "List Other Ledgers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/other-ledgers", "host": ["{{base_url}}"], "path": ["api","other-ledgers"] }
+          }
+        },
+        {
+          "name": "Create Other Ledger",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company\": \"KK ENTERPRISE\",\n  \"ledgergroup\": 5,\n  \"opening_balance\": 0,\n  \"opening_balance_type\": \"Dr\",\n  \"billbybill\": \"Yes\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/api/other-ledgers", "host": ["{{base_url}}"], "path": ["api","other-ledgers"] },
+            "description": "Set billbybill: \"Yes\" to enable per-ledger bill allocation in Journal/Contra/Payment/Receipt vouchers."
+          }
+        },
+        {
+          "name": "Update Other Ledger",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"billbybill\": \"Yes\"\n}" },
+            "url": { "raw": "{{base_url}}/api/other-ledgers/1", "host": ["{{base_url}}"], "path": ["api","other-ledgers","1"] }
+          }
+        },
+        {
+          "name": "Delete Other Ledger",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/other-ledgers/1", "host": ["{{base_url}}"], "path": ["api","other-ledgers","1"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Voucher Types",
+      "item": [
+        {
+          "name": "List Voucher Types",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/vchtypes", "host": ["{{base_url}}"], "path": ["api","vchtypes"] }
+          }
+        },
+        {
+          "name": "Create Voucher Type",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Custom Journal\",\n  \"parent_id\": 4\n}" },
+            "url": { "raw": "{{base_url}}/api/vchtypes", "host": ["{{base_url}}"], "path": ["api","vchtypes"] }
+          }
+        },
+        {
+          "name": "Update Voucher Type",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Renamed Type\"\n}" },
+            "url": { "raw": "{{base_url}}/api/vchtypes/1", "host": ["{{base_url}}"], "path": ["api","vchtypes","1"] }
+          }
+        },
+        {
+          "name": "Delete Voucher Type",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/vchtypes/1", "host": ["{{base_url}}"], "path": ["api","vchtypes","1"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Ledger Groups",
+      "item": [
+        {
+          "name": "List Ledger Groups",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/ledger-groups", "host": ["{{base_url}}"], "path": ["api","ledger-groups"] }
+          }
+        },
+        {
+          "name": "Create Ledger Group",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Sundry Creditors\",\n  \"parent_id\": 1\n}" },
+            "url": { "raw": "{{base_url}}/api/ledger-groups", "host": ["{{base_url}}"], "path": ["api","ledger-groups"] }
+          }
+        },
+        {
+          "name": "Update Ledger Group",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Updated Group Name\"\n}" },
+            "url": { "raw": "{{base_url}}/api/ledger-groups/1", "host": ["{{base_url}}"], "path": ["api","ledger-groups","1"] }
+          }
+        },
+        {
+          "name": "Delete Ledger Group",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/ledger-groups/1", "host": ["{{base_url}}"], "path": ["api","ledger-groups","1"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Stats",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/dashboard/stats", "host": ["{{base_url}}"], "path": ["api","dashboard","stats"] }
+          }
+        },
+        {
+          "name": "Operations Snapshot",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/dashboard/operations-snapshot", "host": ["{{base_url}}"], "path": ["api","dashboard","operations-snapshot"] }
+          }
+        },
+        {
+          "name": "Revenue by Month",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/dashboard/revenue-by-month", "host": ["{{base_url}}"], "path": ["api","dashboard","revenue-by-month"] }
+          }
+        },
+        {
+          "name": "Pending by User",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/dashboard/pending-users", "host": ["{{base_url}}"], "path": ["api","dashboard","pending-users"] }
+          }
+        },
+        {
+          "name": "My Performance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/dashboard/my-performance",
+              "host": ["{{base_url}}"], "path": ["api","dashboard","my-performance"],
+              "query": [
+                { "key": "fy",   "value": "2026-27", "disabled": true },
+                { "key": "user", "value": "",         "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Admin Performance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/dashboard/admin-performance",
+              "host": ["{{base_url}}"], "path": ["api","dashboard","admin-performance"],
+              "query": [{ "key": "fy", "value": "2026-27", "disabled": true }]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Activities",
+      "item": [
+        {
+          "name": "List Activities",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/activities?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","activities"],
+              "query": [
+                { "key": "page",          "value": "1" },
+                { "key": "limit",         "value": "20" },
+                { "key": "activity_type", "value": "", "disabled": true },
+                { "key": "customer_id",   "value": "", "disabled": true },
+                { "key": "start_date",    "value": "2026-04-01", "disabled": true },
+                { "key": "end_date",      "value": "2026-06-30", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Activity by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/activities/1", "host": ["{{base_url}}"], "path": ["api","activities","1"] }
+          }
+        },
+        {
+          "name": "Create Activity",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"customer_id\": 10,\n  \"activity_type\": \"Renewal\",\n  \"activity_date\": \"2026-06-22\",\n  \"amount\": 5000\n}" },
+            "url": { "raw": "{{base_url}}/api/activities", "host": ["{{base_url}}"], "path": ["api","activities"] }
+          }
+        },
+        {
+          "name": "Update Activity",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 6000\n}" },
+            "url": { "raw": "{{base_url}}/api/activities/1", "host": ["{{base_url}}"], "path": ["api","activities","1"] }
+          }
+        },
+        {
+          "name": "Delete Activity",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/activities/1", "host": ["{{base_url}}"], "path": ["api","activities","1"] }
+          }
+        },
+        {
+          "name": "Mark Activities Billed",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"activity_ids\": [1, 2, 3],\n  \"voucher_id\": 5,\n  \"voucher_no\": \"SAL-001\"\n}" },
+            "url": { "raw": "{{base_url}}/api/activities/mark-billed", "host": ["{{base_url}}"], "path": ["api","activities","mark-billed"] }
+          }
+        },
+        {
+          "name": "Get Revenue Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/activities/revenue", "host": ["{{base_url}}"], "path": ["api","activities","revenue"] }
+          }
+        },
+        {
+          "name": "Get Renewal Defaults",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/activities/renewal-defaults?id=10&type=customer",
+              "host": ["{{base_url}}"], "path": ["api","activities","renewal-defaults"],
+              "query": [
+                { "key": "id",   "value": "10" },
+                { "key": "type", "value": "customer", "description": "customer | server" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/users", "host": ["{{base_url}}"], "path": ["api","users"] }
+          }
+        },
+        {
+          "name": "Get Basic User List",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/users/basic", "host": ["{{base_url}}"], "path": ["api","users","basic"] }
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/users/1", "host": ["{{base_url}}"], "path": ["api","users","1"] }
+          }
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New User\",\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"role\": \"staff\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/users", "host": ["{{base_url}}"], "path": ["api","users"] }
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Updated Name\"\n}" },
+            "url": { "raw": "{{base_url}}/api/users/1", "host": ["{{base_url}}"], "path": ["api","users","1"] }
+          }
+        },
+        {
+          "name": "Update User Permissions",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"permissions\": {\n    \"vouchers\": { \"view\": true, \"create\": true, \"edit\": false, \"delete\": false }\n  }\n}" },
+            "url": { "raw": "{{base_url}}/api/users/1/permissions", "host": ["{{base_url}}"], "path": ["api","users","1","permissions"] }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/users/1", "host": ["{{base_url}}"], "path": ["api","users","1"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Servers",
+      "item": [
+        {
+          "name": "List Servers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/servers?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","servers"],
+              "query": [
+                { "key": "page",   "value": "1" },
+                { "key": "limit",  "value": "20" },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "status", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Server by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/servers/1", "host": ["{{base_url}}"], "path": ["api","servers","1"] }
+          }
+        },
+        {
+          "name": "Create Server",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"company\": \"Main Server\",\n  \"server_ip\": \"192.168.1.1\",\n  \"port\": 8080,\n  \"status\": \"Active\"\n}" },
+            "url": { "raw": "{{base_url}}/api/servers", "host": ["{{base_url}}"], "path": ["api","servers"] }
+          }
+        },
+        {
+          "name": "Update Server",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Inactive\"\n}" },
+            "url": { "raw": "{{base_url}}/api/servers/1", "host": ["{{base_url}}"], "path": ["api","servers","1"] }
+          }
+        },
+        {
+          "name": "Delete Server",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/servers/1", "host": ["{{base_url}}"], "path": ["api","servers","1"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Items",
+      "item": [
+        {
+          "name": "List Items",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/items", "host": ["{{base_url}}"], "path": ["api","items"] }
+          }
+        },
+        {
+          "name": "Create Item",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"item_name\": \"Tally Prime\",\n  \"hsn\": \"998314\",\n  \"gst\": 18,\n  \"rate\": 18000\n}" },
+            "url": { "raw": "{{base_url}}/api/items", "host": ["{{base_url}}"], "path": ["api","items"] }
+          }
+        },
+        {
+          "name": "Update Item",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"rate\": 20000\n}" },
+            "url": { "raw": "{{base_url}}/api/items/1", "host": ["{{base_url}}"], "path": ["api","items","1"] }
+          }
+        },
+        {
+          "name": "Delete Item",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/items/1", "host": ["{{base_url}}"], "path": ["api","items","1"] }
+          }
+        },
+        {
+          "name": "List Item Groups",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/items/groups", "host": ["{{base_url}}"], "path": ["api","items","groups"] }
+          }
+        },
+        {
+          "name": "List Item Categories",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/items/categories", "host": ["{{base_url}}"], "path": ["api","items","categories"] }
+          }
+        },
+        {
+          "name": "List Flavours",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/items/flavours", "host": ["{{base_url}}"], "path": ["api","items","flavours"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Service Calls / Leads",
+      "item": [
+        {
+          "name": "List Service Calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/service-calls?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","service-calls"],
+              "query": [
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "20" },
+                { "key": "status",    "value": "", "disabled": true },
+                { "key": "search",    "value": "", "disabled": true },
+                { "key": "startDate", "value": "", "disabled": true },
+                { "key": "endDate",   "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Service Call",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile_no\": \"9999999999\",\n  \"service_type\": \"Installation\",\n  \"remark\": \"Fresh install request\",\n  \"entry_type\": \"service\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/service-calls", "host": ["{{base_url}}"], "path": ["api","service-calls"] }
+          }
+        },
+        {
+          "name": "Take Service Call",
+          "request": {
+            "method": "PUT",
+            "url": { "raw": "{{base_url}}/api/service-calls/1/take", "host": ["{{base_url}}"], "path": ["api","service-calls","1","take"] }
+          }
+        },
+        {
+          "name": "Close Service Call",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"resolution_note\": \"Issue resolved\"\n}" },
+            "url": { "raw": "{{base_url}}/api/service-calls/1/close", "host": ["{{base_url}}"], "path": ["api","service-calls","1","close"] }
+          }
+        },
+        {
+          "name": "Transfer Service Call",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"assign_to\": \"user@example.com\"\n}" },
+            "url": { "raw": "{{base_url}}/api/service-calls/1/transfer", "host": ["{{base_url}}"], "path": ["api","service-calls","1","transfer"] }
+          }
+        },
+        {
+          "name": "Cancel Service Call",
+          "request": {
+            "method": "PUT",
+            "url": { "raw": "{{base_url}}/api/service-calls/1/cancel", "host": ["{{base_url}}"], "path": ["api","service-calls","1","cancel"] }
+          }
+        },
+        {
+          "name": "Lookup by Mobile",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/service-calls/lookup/9999999999", "host": ["{{base_url}}"], "path": ["api","service-calls","lookup","9999999999"] }
+          }
+        },
+        {
+          "name": "Get Notes",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/service-calls/1/notes", "host": ["{{base_url}}"], "path": ["api","service-calls","1","notes"] }
+          }
+        },
+        {
+          "name": "Add Note",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"note_type\": \"update\",\n  \"content\": \"Contacted customer, will visit tomorrow\"\n}" },
+            "url": { "raw": "{{base_url}}/api/service-calls/1/notes", "host": ["{{base_url}}"], "path": ["api","service-calls","1","notes"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Visits & Tasks",
+      "item": [
+        {
+          "name": "Get Pending Visits",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/visits/pending", "host": ["{{base_url}}"], "path": ["api","visits","pending"] }
+          }
+        },
+        {
+          "name": "List All Visits",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/visits/all?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","visits","all"],
+              "query": [
+                { "key": "page",   "value": "1" },
+                { "key": "limit",  "value": "20" },
+                { "key": "status", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Visit/Task",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": 10,\n  \"visit_type\": \"Visit\",\n  \"scheduled_date\": \"2026-06-23\",\n  \"remark\": \"Follow-up visit\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/visits/create", "host": ["{{base_url}}"], "path": ["api","visits","create"] }
+          }
+        },
+        {
+          "name": "Complete Visit",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"id\": 1,\n  \"lat\": 19.076,\n  \"lng\": 72.877,\n  \"remark\": \"Visit completed successfully\"\n}" },
+            "url": { "raw": "{{base_url}}/api/visits/complete", "host": ["{{base_url}}"], "path": ["api","visits","complete"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Attendance",
+      "item": [
+        {
+          "name": "Get Status",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/attendance/status", "host": ["{{base_url}}"], "path": ["api","attendance","status"] }
+          }
+        },
+        {
+          "name": "Check In",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"lat\": 19.076,\n  \"lng\": 72.877\n}" },
+            "url": { "raw": "{{base_url}}/api/attendance/checkin", "host": ["{{base_url}}"], "path": ["api","attendance","checkin"] }
+          }
+        },
+        {
+          "name": "Check Out",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"lat\": 19.076,\n  \"lng\": 72.877\n}" },
+            "url": { "raw": "{{base_url}}/api/attendance/checkout", "host": ["{{base_url}}"], "path": ["api","attendance","checkout"] }
+          }
+        },
+        {
+          "name": "Get My Monthly Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance/my-monthly-stats?month=6&year=2026",
+              "host": ["{{base_url}}"], "path": ["api","attendance","my-monthly-stats"],
+              "query": [
+                { "key": "month", "value": "6" },
+                { "key": "year",  "value": "2026" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Daily Report (Admin)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance/report?date=2026-06-22",
+              "host": ["{{base_url}}"], "path": ["api","attendance","report"],
+              "query": [{ "key": "date", "value": "2026-06-22" }]
+            }
+          }
+        },
+        {
+          "name": "Monthly Export (Admin)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance/monthly-export?month=6&year=2026",
+              "host": ["{{base_url}}"], "path": ["api","attendance","monthly-export"],
+              "query": [
+                { "key": "month", "value": "6" },
+                { "key": "year",  "value": "2026" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Tally (Expiry / Renewal)",
+      "item": [
+        {
+          "name": "Get Expiry Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/tally/expiry-report?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","tally","expiry-report"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "expiry_status", "value": "expired", "disabled": true },
+                { "key": "date_from",     "value": "2026-04-01", "disabled": true },
+                { "key": "date_to",       "value": "2026-06-30", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Serial History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/tally/serial-history?serial=ABC123",
+              "host": ["{{base_url}}"], "path": ["api","tally","serial-history"],
+              "query": [
+                { "key": "serial", "value": "ABC123" },
+                { "key": "limit",  "value": "10", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "List Bills",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/billing/bills?page=1&limit=20",
+              "host": ["{{base_url}}"], "path": ["api","billing","bills"],
+              "query": [
+                { "key": "page",        "value": "1" },
+                { "key": "limit",       "value": "20" },
+                { "key": "bill_status", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Bill",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"bill_type\": \"Renewal\",\n  \"customer_id\": 10,\n  \"amount\": 5000\n}" },
+            "url": { "raw": "{{base_url}}/api/billing/bills", "host": ["{{base_url}}"], "path": ["api","billing","bills"] }
+          }
+        },
+        {
+          "name": "Get Bill by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/billing/bills/1", "host": ["{{base_url}}"], "path": ["api","billing","bills","1"] }
+          }
+        },
+        {
+          "name": "List Payments",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/billing/payments", "host": ["{{base_url}}"], "path": ["api","billing","payments"] }
+          }
+        },
+        {
+          "name": "Add Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"bill_id\": 1,\n  \"amount\": 5000,\n  \"payment_date\": \"2026-06-22\",\n  \"mode\": \"Bank Transfer\"\n}" },
+            "url": { "raw": "{{base_url}}/api/billing/payments", "host": ["{{base_url}}"], "path": ["api","billing","payments"] }
+          }
+        },
+        {
+          "name": "Get Products",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/billing/products", "host": ["{{base_url}}"], "path": ["api","billing","products"] }
+          }
+        },
+        {
+          "name": "Get Billing Companies",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/billing/billing-companies", "host": ["{{base_url}}"], "path": ["api","billing","billing-companies"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Public Endpoints (No Auth)",
+      "item": [
+        {
+          "name": "Create Online Lead",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_name\": \"Test Corp\",\n  \"name\": \"John\",\n  \"email\": \"john@test.com\",\n  \"phone\": \"9999999999\",\n  \"service\": \"Tally\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/online-lead-create", "host": ["{{base_url}}"], "path": ["api","online-lead-create"] }
+          }
+        },
+        {
+          "name": "Create Online Service Request",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"service_type\": \"Support\",\n  \"contact_number\": \"9999999999\",\n  \"remark\": \"Need help with installation\"\n}" },
+            "url": { "raw": "{{base_url}}/api/online-service-create", "host": ["{{base_url}}"], "path": ["api","online-service-create"] }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Misc",
+      "item": [
+        {
+          "name": "List States",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/states", "host": ["{{base_url}}"], "path": ["api","states"] }
+          }
+        },
+        {
+          "name": "Lookup Pincode",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/pincodes/lookup/400001", "host": ["{{base_url}}"], "path": ["api","pincodes","lookup","400001"] }
+          }
+        },
+        {
+          "name": "List Resellers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/resellers", "host": ["{{base_url}}"], "path": ["api","resellers"] }
+          }
+        },
+        {
+          "name": "List Resellers Dropdown",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/resellers/dropdown", "host": ["{{base_url}}"], "path": ["api","resellers","dropdown"] }
+          }
+        }
+      ]
+    }
+
+  ]
+}

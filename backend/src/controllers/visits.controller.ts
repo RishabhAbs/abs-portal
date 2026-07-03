@@ -1,5 +1,10 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards, Request, UseInterceptors, UploadedFile, Res, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname, join } from 'path';
+import { createReadStream, existsSync } from 'fs';
+import { Response } from 'express';
 import { VisitsService } from '../services/visits.service';
 import { CustomersService } from '../services/customers.service';
 import { TdlService } from '../services/tdl.service';
@@ -238,5 +243,56 @@ export class VisitsController {
     @RequireAnyPermission({ entity: 'visits_our', action: 'force_checkin' }, { entity: 'visits_not_our', action: 'force_checkin' })
     async forceCheckin(@Body() body: { id: number; allowed: boolean }, @Request() req: any) {
         return this.visitsService.toggleForceCheckin(body.id, body.allowed, req.user);
+    }
+
+    @Post(':id/recording')
+    @ApiOperation({ summary: 'Upload visit recording (webm/ogg audio)' })
+    @RequireAnyPermission(
+        { entity: 'visits_our', action: 'checkin' },
+        { entity: 'visits_not_our', action: 'checkin' },
+        { entity: 'tasks', action: 'checkin' }
+    )
+    @UseInterceptors(FileInterceptor('recording', {
+        storage: diskStorage({
+            destination: join(process.cwd(), 'uploads', 'visit-recordings'),
+            filename: (_req, file, cb) => {
+                const ext = extname(file.originalname) || '.webm';
+                cb(null, `visit-${Date.now()}${ext}`);
+            },
+        }),
+        limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB max
+        fileFilter: (_req, file, cb) => {
+            if (file.mimetype.startsWith('audio/')) cb(null, true);
+            else cb(new Error('Only audio files are allowed'), false);
+        },
+    }))
+    async uploadRecording(
+        @Param('id') id: string,
+        @UploadedFile() file: Express.Multer.File,
+        @Request() req: any,
+    ) {
+        if (!file) throw new NotFoundException('No audio file received');
+        const relativePath = `visit-recordings/${file.filename}`;
+        await this.visitsService.saveRecording(parseInt(id), relativePath);
+        return { success: true, path: relativePath };
+    }
+
+    @Get(':id/recording')
+    @ApiOperation({ summary: 'Stream visit recording audio' })
+    @RequireAnyPermission(
+        { entity: 'visits_our', action: 'view' },
+        { entity: 'visits_not_our', action: 'view' },
+        { entity: 'tasks', action: 'view' }
+    )
+    async getRecording(@Param('id') id: string, @Res() res: Response) {
+        const relativePath = await this.visitsService.getRecordingPath(parseInt(id));
+        if (!relativePath) throw new NotFoundException('No recording found for this visit');
+        const fullPath = join(process.cwd(), 'uploads', relativePath);
+        if (!existsSync(fullPath)) throw new NotFoundException('Recording file not found on disk');
+        const ext = extname(fullPath).toLowerCase();
+        const mimeMap: Record<string, string> = { '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.mp4': 'audio/mp4', '.m4a': 'audio/mp4' };
+        res.setHeader('Content-Type', mimeMap[ext] || 'audio/webm');
+        res.setHeader('Content-Disposition', `inline; filename="visit-${id}${ext}"`);
+        createReadStream(fullPath).pipe(res);
     }
 }

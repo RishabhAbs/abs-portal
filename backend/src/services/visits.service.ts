@@ -94,7 +94,8 @@ export class VisitsService implements OnModuleInit {
             { name: 'check_out_response', def: 'VARCHAR(100)' },
             { name: 'customer_behaviour', def: 'TEXT' },
             { name: 'force_checkin_allowed', def: 'BOOLEAN DEFAULT FALSE' },
-            { name: 'phone_no', def: 'VARCHAR(50)' }
+            { name: 'phone_no', def: 'VARCHAR(50)' },
+            { name: 'recording_path', def: 'VARCHAR(500) DEFAULT NULL' }
         ];
 
         try {
@@ -569,5 +570,15 @@ export class VisitsService implements OnModuleInit {
         }
         await this.db.execute(`UPDATE cloud_visits SET force_checkin_allowed = ? WHERE id = ?`, [allowed, id]);
         return { success: true };
+    }
+
+    async saveRecording(id: number, filePath: string) {
+        await this.db.execute(`UPDATE cloud_visits SET recording_path = ? WHERE id = ?`, [filePath, id]);
+        return { success: true };
+    }
+
+    async getRecordingPath(id: number): Promise<string | null> {
+        const row = await this.db.queryOne<any>(`SELECT recording_path FROM cloud_visits WHERE id = ?`, [id]);
+        return row?.recording_path || null;
     }
 }

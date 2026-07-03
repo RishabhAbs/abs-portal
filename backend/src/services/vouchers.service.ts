@@ -85,6 +85,11 @@ export class VouchersService implements OnModuleInit {
             await this.db.execute(`ALTER TABLE vch_details ADD INDEX idx_checked_by (checked_by)`).catch(() => {});
         }
 
+        // Make party_ledger_id nullable — Stock Journal vouchers have no party
+        await this.db.execute(
+            `ALTER TABLE vch_details MODIFY COLUMN party_ledger_id INT DEFAULT NULL`
+        ).catch(() => {});
+
         await this.db.execute(`
             CREATE TABLE IF NOT EXISTS ledger_entries (
                 id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -115,6 +120,8 @@ export class VouchersService implements OnModuleInit {
 
         // Migration: add gst_rate to inventory_entries if missing
         await this.db.execute(`ALTER TABLE inventory_entries ADD COLUMN gst_rate DECIMAL(5,2) DEFAULT 0`).catch(() => {});
+        // Migration: add side column for Stock Journal (source/destination)
+        await this.db.execute(`ALTER TABLE inventory_entries ADD COLUMN side ENUM('source','destination') DEFAULT NULL`).catch(() => {});
 
         await this.db.execute(`
             CREATE TABLE IF NOT EXISTS batch (
@@ -382,46 +389,115 @@ export class VouchersService implements OnModuleInit {
             batch_rows?: Array<{ batch_name?: string; qty: number; rate: number; amount: number }> | null;
         }>;
         ledgers?: Array<{ ledger_id: number; amount: number }>; // user-defined, pre-filtered non-zero
-        bill_allocation?: Array<{ type: string; refno: string; amount: number; direction?: string }>;
+        // ledger_id ties an allocation to a specific journal row so multiple
+        // bill-by-bill ledgers in one voucher (e.g. two customers in one
+        // Receipt) each keep their own bill tracking. Omitting it falls
+        // back to party_ledger_id for legacy callers.
+        bill_allocation?: Array<{ type: string; refno: string; amount: number; direction?: string; ledger_id?: number }>;
+        stock_source?: Array<{ item_id: number; qty: number; rate: number; amount: number; gst_rate?: number; batch_rows?: Array<{ batch_name?: string; qty: number; rate: number; amount: number }> | null }>;
+        stock_destination?: Array<{ item_id: number; qty: number; rate: number; amount: number; gst_rate?: number; batch_rows?: Array<{ batch_name?: string; qty: number; rate: number; amount: number }> | null }>;
     }) {
         // Pre-flight validations (outside transaction — no DB writes yet)
-        if (data.vch_no) {
-            const [dup] = await this.db.query<any>(
-                `SELECT COUNT(*) as cnt FROM vch_details
-                 WHERE vch_no = ? AND vch_type_id = ?`,
-                [data.vch_no, data.vch_type_id || null],
-            );
-            if ((dup?.cnt ?? 0) > 0) {
-                throw new BadRequestException(`Voucher number "${data.vch_no}" already exists for this voucher type`);
-            }
+        let assignedVchNo = data.vch_no || null;
+        let vchNoBumped   = false; // true if we auto-incremented past a collision
+        if (assignedVchNo && data.vch_type_id) {
+            assignedVchNo = await this.resolveUniqueVchNo(assignedVchNo, data.vch_type_id);
+            if (assignedVchNo !== data.vch_no) vchNoBumped = true;
         }
         await this.validateBatchSerials(data.items || []);
 
         // ── All DB writes inside a transaction — atomic all-or-nothing ──
         return this.db.withTransaction(async (conn) => {
+
+            // ── Stock Journal mode: only inventory entries, no ledger entries ──
+            const isStockJournal = await (async () => {
+                if (!data.vch_type_id) return false;
+                const vt = await this.db.queryOne<any>(
+                    `SELECT v.name, p.name AS parent_name FROM vchtype v
+                     LEFT JOIN vchtype p ON v.parent_id = p.id AND v.parent_id != v.id
+                     WHERE v.id = ?`, [data.vch_type_id], conn,
+                );
+                const n = ((vt?.name || '') + (vt?.parent_name || '')).toLowerCase();
+                return n.includes('stock journal');
+            })();
+
+            if (isStockJournal) {
+                const sourceItems = (data.stock_source || []) as any[];
+                const destItems   = (data.stock_destination || []) as any[];
+
+                const vchResult = await this.db.execute(
+                    `INSERT INTO vch_details (vch_type_id, vch_no, vch_date, party_ledger_id, amount, remark, created_by)
+                     VALUES (?, ?, ?, NULL, 0, ?, ?)`,
+                    [data.vch_type_id, assignedVchNo, data.vch_date || null,
+                     data.remark || null, data.created_by || null],
+                    conn,
+                );
+                const vchId = vchResult.insertId;
+
+                // Dummy ledger entry to hang inventory_entries off (led_id required)
+                const dummyLed = await this.db.execute(
+                    `INSERT INTO ledger_entries (vch_id, ledger_id, amount) VALUES (?, 0, 0)`,
+                    [vchId], conn,
+                );
+                const dummyLedId = dummyLed.insertId;
+
+                // Source = negative (consumption/outward)
+                for (const item of sourceItems) {
+                    const qty = -(Math.abs(Number(item.qty)));
+                    const amt = -(Math.abs(Number(item.amount)));
+                    const invRes = await this.db.execute(
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'source')`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                    );
+                    if (item.batch_rows?.length) {
+                        for (const b of item.batch_rows) {
+                            await this.db.execute(
+                                `INSERT INTO batch (vch_id, inventory_id, item_id, batch_name, qty, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                                [vchId, invRes.insertId, item.item_id, b.batch_name || null, -(Math.abs(Number(b.qty))), b.rate, -(Math.abs(Number(b.amount)))], conn,
+                            );
+                        }
+                    }
+                }
+
+                // Destination = positive (production/inward)
+                for (const item of destItems) {
+                    const qty = Math.abs(Number(item.qty));
+                    const amt = Math.abs(Number(item.amount));
+                    const invRes = await this.db.execute(
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'destination')`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                    );
+                    if (item.batch_rows?.length) {
+                        for (const b of item.batch_rows) {
+                            await this.db.execute(
+                                `INSERT INTO batch (vch_id, inventory_id, item_id, batch_name, qty, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                                [vchId, invRes.insertId, item.item_id, b.batch_name || null, Math.abs(Number(b.qty)), b.rate, Math.abs(Number(b.amount))], conn,
+                            );
+                        }
+                    }
+                }
+
+                return { id: vchId, vch_no: assignedVchNo, vch_no_bumped: vchNoBumped };
+            }
+
             // Journal mode: Contra / Journal / Payment / Receipt — no inventory items
             if (!data.items || data.items.length === 0) {
                 const drTotal = +(data.ledgers || [])
                     .filter(l => (l.amount || 0) > 0)
                     .reduce((s, l) => s + l.amount, 0).toFixed(2);
 
-                const partyLedger = (data.ledgers || []).find(l => l.ledger_id === data.party_ledger_id);
-                const normalizedBA = this.normalizeBillAllocation(
-                    partyLedger?.amount ?? 0,
-                    data.bill_allocation,
-                    data.vch_no || null,
-                );
-
                 const vchResult = await this.db.execute(
                     `INSERT INTO vch_details (vch_type_id, vch_no, vch_date, party_ledger_id, amount, remark, created_by)
                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [data.vch_type_id || null, data.vch_no || null, data.vch_date || null,
+                    [data.vch_type_id || null, assignedVchNo, data.vch_date || null,
                      data.party_ledger_id, drTotal, data.remark || null, data.created_by || null],
                     conn,
                 );
                 const vchId = vchResult.insertId;
 
-                let partyLedEntryId: number | null = null;
+                // Multiple ledger rows can each be bill-by-bill — track every
+                // ledger's own ledentry_id, not just the single party's.
+                const ledEntryIdByLedger = new Map<number, number>();
                 for (const led of data.ledgers || []) {
                     if (!led.ledger_id || !led.amount) continue;
                     const ledRes = await this.db.execute(
@@ -429,27 +505,48 @@ export class VouchersService implements OnModuleInit {
                         [vchId, led.ledger_id, led.amount],
                         conn,
                     );
-                    if (led.ledger_id === data.party_ledger_id && partyLedEntryId === null) {
-                        partyLedEntryId = ledRes.insertId;
+                    if (!ledEntryIdByLedger.has(led.ledger_id)) {
+                        ledEntryIdByLedger.set(led.ledger_id, ledRes.insertId);
                     }
                 }
 
-                if (normalizedBA && normalizedBA.length > 0) {
+                // Group bill_allocation entries by ledger_id (falls back to the
+                // primary party_ledger_id for legacy callers that omit ledger_id),
+                // normalize each ledger's allocations against ITS OWN signed
+                // amount, then insert against ITS OWN ledentry_id.
+                const baByLedger = new Map<number, Array<{ amount: number; direction?: string; type?: string; refno?: string }>>();
+                for (const ba of data.bill_allocation || []) {
+                    const ledgerId = (ba as any).ledger_id ?? data.party_ledger_id;
+                    if (!baByLedger.has(ledgerId)) baByLedger.set(ledgerId, []);
+                    baByLedger.get(ledgerId)!.push(ba);
+                }
+                for (const [ledgerId, entries] of baByLedger) {
+                    const led = (data.ledgers || []).find(l => l.ledger_id === ledgerId);
+                    const normalizedBA = this.normalizeBillAllocation(
+                        led?.amount ?? 0,
+                        entries,
+                        assignedVchNo,
+                    );
+                    const ledEntryId = ledEntryIdByLedger.get(ledgerId) ?? null;
+                    if (!normalizedBA || normalizedBA.length === 0) continue;
                     for (const ba of normalizedBA) {
                         if (!ba.amount) continue;
                         const signedAmt = ba.direction
                             ? (ba.direction === 'Cr' ? -Math.abs(ba.amount) : Math.abs(ba.amount))
                             : (ba.type === 'Agr.' ? -Math.abs(ba.amount) : Math.abs(ba.amount));
+                        const billname = (!ba.type || ba.type === 'New')
+                            ? (assignedVchNo || ba.refno || null)
+                            : (ba.refno || null);
                         await this.db.execute(
                             `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
-                            [vchId, partyLedEntryId, data.party_ledger_id, ba.refno || null, signedAmt],
+                            [vchId, ledEntryId, ledgerId, billname, signedAmt],
                             conn,
                         );
                     }
                 }
 
                 await this.linkLeadAndAutoClose(vchId, data.lead_id, data.created_by, conn);
-                return { id: vchId };
+                return { id: vchId, vch_no: assignedVchNo, vch_no_bumped: vchNoBumped };
             }
 
             // 2. Sign + goods-ledger logic via deemed_positive from vchtype table.
@@ -479,7 +576,7 @@ export class VouchersService implements OnModuleInit {
             const vchResult = await this.db.execute(
                 `INSERT INTO vch_details (vch_type_id, vch_no, vch_date, party_ledger_id, amount, remark, created_by)
                  VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [data.vch_type_id || null, data.vch_no || null, data.vch_date || null, data.party_ledger_id, grandTotal, data.remark || null, data.created_by || null],
+                [data.vch_type_id || null, assignedVchNo, data.vch_date || null, data.party_ledger_id, grandTotal, data.remark || null, data.created_by || null],
                 conn,
             );
             const vchId = vchResult.insertId;
@@ -558,7 +655,7 @@ export class VouchersService implements OnModuleInit {
             const normalizedBACreate = this.normalizeBillAllocation(
                 grandTotal * baseSignCreate,
                 data.bill_allocation,
-                data.vch_no || null,
+                assignedVchNo,
             );
             if (normalizedBACreate && normalizedBACreate.length > 0) {
                 const baseSign = baseSignCreate;
@@ -569,17 +666,39 @@ export class VouchersService implements OnModuleInit {
                         : (ba.type === 'Agr.'
                             ? -Math.abs(ba.amount) * baseSign
                             :  Math.abs(ba.amount) * baseSign);
+                    // For 'New' refs, always use the actual saved vch_no (handles race-bumped numbers)
+                    const billname = (!ba.type || ba.type === 'New')
+                        ? (assignedVchNo || ba.refno || null)
+                        : (ba.refno || null);
                     await this.db.execute(
                         `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
-                        [vchId, partyLedEntryId, data.party_ledger_id, ba.refno || null, signedAmt],
+                        [vchId, partyLedEntryId, data.party_ledger_id, billname, signedAmt],
                         conn,
                     );
                 }
             }
 
             await this.linkLeadAndAutoClose(vchId, data.lead_id, data.created_by, conn);
-            return { id: vchId };
+            return { id: vchId, vch_no: assignedVchNo, vch_no_bumped: vchNoBumped };
         });
+    }
+
+    /** Find the next unused voucher number starting from `candidate`.
+     *  Strips trailing digits, increments until no collision. Max 1000 attempts. */
+    private async resolveUniqueVchNo(candidate: string, vchTypeId: number): Promise<string> {
+        let current = candidate;
+        for (let i = 0; i < 1000; i++) {
+            const [dup] = await this.db.query<any>(
+                `SELECT COUNT(*) as cnt FROM vch_details WHERE vch_no = ? AND vch_type_id = ?`,
+                [current, vchTypeId],
+            );
+            if ((dup?.cnt ?? 0) === 0) return current;
+            // Increment the trailing number in the string
+            current = current.replace(/(\d+)(?=\D*$)/, (m) => String(parseInt(m, 10) + 1).padStart(m.length, '0'));
+            // If no digits found, append a suffix
+            if (!/\d/.test(current)) current = current + '1';
+        }
+        return current;
     }
 
     // Stamp the voucher with lead_id and close the linked lead. Idempotent and
@@ -1977,7 +2096,7 @@ export class VouchersService implements OnModuleInit {
         for (const le of ledgerEntries) {
             le.inventoryEntries = await this.db.query<any>(
                 `SELECT ie.id, ie.led_id, ie.item_id, ie.qty, ie.rate, ie.amount,
-                        ie.created_at,
+                        ie.created_at, ie.side,
                         i.item_name,
                         i.hsn,
                         COALESCE(i.gst, ie.gst_rate, 0) AS gst_rate
@@ -2000,30 +2119,97 @@ export class VouchersService implements OnModuleInit {
         return { ...vch, ledgerEntries, billAllocations };
     }
 
-    /** Generate next voucher number for a given vch_type_id.
-     *  Format: <prefix><padded-number> e.g. S-001, P-001
-     *  Prefix is derived from the type name (first letter). */
-    async getNextVoucherNo(vchTypeId: number): Promise<string> {
+    /** Generate next voucher number for a given vch_type_id using date-effective periods. */
+    async getNextVoucherNo(vchTypeId: number, forDate?: string): Promise<string> {
+        const today = forDate || new Date().toISOString().split('T')[0];
+
         const vtRow = await this.db.queryOne<any>(
-            `SELECT v.name, COALESCE(p.name, v.name) AS parent_name
-             FROM vchtype v
-             LEFT JOIN vchtype p ON v.parent_id = p.id AND v.parent_id != v.id
-             WHERE v.id = ?`, [vchTypeId]
+            `SELECT numbering_mode, vch_width FROM vchtype WHERE id = ?`, [vchTypeId]
         );
-        const typeName: string = (vtRow?.name || vtRow?.parent_name || 'V').trim();
-        const prefix = typeName.charAt(0).toUpperCase();
+        if (!vtRow || vtRow.numbering_mode !== 'automatic') return '';
+
+        const width: number = vtRow.vch_width || 3;
+
+        // Resolve effective prefix/suffix/start_no for the voucher date from period tables
+        const np = await this.db.queryOne<any>(
+            `SELECT applicable_from, start_no, period_type FROM vchtype_numbering_period
+             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
+            [vchTypeId, today]
+        );
+        const pp = await this.db.queryOne<any>(
+            `SELECT particulars FROM vchtype_prefix_period
+             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
+            [vchTypeId, today]
+        );
+        const sp = await this.db.queryOne<any>(
+            `SELECT particulars FROM vchtype_suffix_period
+             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
+            [vchTypeId, today]
+        );
+
+        const prefix: string  = pp?.particulars ?? '';
+        const suffix: string  = sp?.particulars ?? '';
+        const startNo: number = np?.start_no ?? 1;
+        const periodType: string = np?.period_type ?? 'yearly';
+        const currentPeriodFrom: string | null = np?.applicable_from
+            ? (typeof np.applicable_from === 'string' ? np.applicable_from : new Date(np.applicable_from).toISOString().split('T')[0])
+            : null;
+
+        // Filter by effective period date range so the counter restarts when a new period begins.
+        // The lower bound is the period's applicable_from (or financial year start for yearly mode).
+        // The upper bound is the next period's applicable_from (if any).
+        let dateFilter = '';
+        let dateParams: any[] = [];
+
+        if (periodType === 'yearly' && currentPeriodFrom) {
+            // For yearly: use financial year start OR the period's applicable_from, whichever is later
+            const d = new Date(today);
+            const fyStart = d.getMonth() >= 3
+                ? `${d.getFullYear()}-04-01`
+                : `${d.getFullYear() - 1}-04-01`;
+            const effectiveStart = currentPeriodFrom > fyStart ? currentPeriodFrom : fyStart;
+            dateFilter = ' AND vch_date >= ?';
+            dateParams = [effectiveStart];
+        } else if (currentPeriodFrom) {
+            // For non-yearly: use the period's applicable_from
+            dateFilter = ' AND vch_date >= ?';
+            dateParams = [currentPeriodFrom];
+        }
+
+        // Find the NEXT numbering period's start date to cap the upper bound
+        const nextPeriod = await this.db.queryOne<any>(
+            `SELECT applicable_from FROM vchtype_numbering_period
+             WHERE vchtype_id = ? AND applicable_from > ? ORDER BY applicable_from ASC LIMIT 1`,
+            [vchTypeId, currentPeriodFrom || today]
+        );
+        if (nextPeriod?.applicable_from) {
+            const nextFrom = typeof nextPeriod.applicable_from === 'string'
+                ? nextPeriod.applicable_from
+                : new Date(nextPeriod.applicable_from).toISOString().split('T')[0];
+            dateFilter += ' AND vch_date < ?';
+            dateParams.push(nextFrom);
+        }
 
         const last = await this.db.queryOne<{ vch_no: string }>(
-            `SELECT vch_no FROM vch_details WHERE vch_type_id = ? AND vch_no IS NOT NULL
-             ORDER BY id DESC LIMIT 1`, [vchTypeId]
+            `SELECT vch_no FROM vch_details WHERE vch_type_id = ? AND vch_no IS NOT NULL${dateFilter}
+             ORDER BY id DESC LIMIT 1`,
+            [vchTypeId, ...dateParams]
         );
 
-        let nextNum = 1;
+        let nextNum = startNo;
         if (last?.vch_no) {
-            const match = last.vch_no.match(/(\d+)$/);
-            if (match) nextNum = parseInt(match[1], 10) + 1;
+            const raw = last.vch_no;
+            const prefixOk = !prefix || raw.startsWith(prefix);
+            const suffixOk = !suffix || raw.endsWith(suffix);
+            if (prefixOk && suffixOk) {
+                let stripped = raw;
+                if (prefix) stripped = stripped.slice(prefix.length);
+                if (suffix) stripped = stripped.slice(0, -suffix.length);
+                const num = parseInt(stripped, 10);
+                if (!isNaN(num) && num >= startNo) nextNum = num + 1;
+            }
         }
-        return `${prefix}-${String(nextNum).padStart(3, '0')}`;
+        return `${prefix}${String(nextNum).padStart(width, '0')}${suffix}`;
     }
 
     /** Return open/pending bill references for a customer.
@@ -2147,6 +2333,71 @@ export class VouchersService implements OnModuleInit {
             );
             await this.db.execute(`DELETE FROM ledger_entries WHERE vch_id = ?`, [id], conn);
 
+            // Stock Journal update path
+            const isStockJournalUpd = await (async () => {
+                if (!data.vch_type_id) return false;
+                const vt = await this.db.queryOne<any>(
+                    `SELECT v.name, p.name AS parent_name FROM vchtype v
+                     LEFT JOIN vchtype p ON v.parent_id = p.id AND v.parent_id != v.id
+                     WHERE v.id = ?`, [data.vch_type_id], conn,
+                );
+                const n = ((vt?.name || '') + (vt?.parent_name || '')).toLowerCase();
+                return n.includes('stock journal');
+            })();
+
+            if (isStockJournalUpd) {
+                const sourceItems = (data.stock_source || []) as any[];
+                const destItems   = (data.stock_destination || []) as any[];
+
+                await this.db.execute(
+                    `UPDATE vch_details SET vch_type_id=?, vch_no=?, vch_date=?, party_ledger_id=NULL, amount=0, remark=? WHERE id=?`,
+                    [data.vch_type_id || null, data.vch_no || null, data.vch_date || null, data.remark || null, id], conn,
+                );
+
+                const dummyLed = await this.db.execute(
+                    `INSERT INTO ledger_entries (vch_id, ledger_id, amount) VALUES (?, 0, 0)`, [id], conn,
+                );
+                const dummyLedId = dummyLed.insertId;
+
+                // Source = negative
+                for (const item of sourceItems) {
+                    const qty = -(Math.abs(Number(item.qty)));
+                    const amt = -(Math.abs(Number(item.amount)));
+                    const invRes = await this.db.execute(
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'source')`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                    );
+                    if (item.batch_rows?.length) {
+                        for (const b of item.batch_rows) {
+                            await this.db.execute(
+                                `INSERT INTO batch (vch_id, inventory_id, item_id, batch_name, qty, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                                [id, invRes.insertId, item.item_id, b.batch_name || null, -(Math.abs(Number(b.qty))), b.rate, -(Math.abs(Number(b.amount)))], conn,
+                            );
+                        }
+                    }
+                }
+
+                // Destination = positive
+                for (const item of destItems) {
+                    const qty = Math.abs(Number(item.qty));
+                    const amt = Math.abs(Number(item.amount));
+                    const invRes = await this.db.execute(
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'destination')`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                    );
+                    if (item.batch_rows?.length) {
+                        for (const b of item.batch_rows) {
+                            await this.db.execute(
+                                `INSERT INTO batch (vch_id, inventory_id, item_id, batch_name, qty, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                                [id, invRes.insertId, item.item_id, b.batch_name || null, Math.abs(Number(b.qty)), b.rate, Math.abs(Number(b.amount))], conn,
+                            );
+                        }
+                    }
+                }
+
+                return { id };
+            }
+
             // Re-compute grandTotal
             let grandTotal = 0;
             let resolvedSet: Awaited<ReturnType<VouchersService['buildItemsLedgerSet']>> | null = null;
@@ -2187,18 +2438,11 @@ export class VouchersService implements OnModuleInit {
         prebuilt?: Awaited<ReturnType<VouchersService['buildItemsLedgerSet']>> | null,
         conn?: import('mysql2/promise').PoolConnection,
     ) {
-        // Journal mode
+        // Journal mode — multiple ledger rows can each be bill-by-bill, so
+        // allocations are grouped per ledger_id (see create() for the same
+        // pattern) rather than always attached to the single party ledger.
         if (!data.items || data.items.length === 0) {
-            // Auto-heal stale bill_alloc totals so a re-saved legacy voucher
-            // ends up with allocations matching the party ledger amount.
-            const partyLedger = (data.ledgers || []).find(l => l.ledger_id === data.party_ledger_id);
-            const normalizedBA = this.normalizeBillAllocation(
-                partyLedger?.amount ?? 0,
-                data.bill_allocation,
-                data.vch_no || null,
-            );
-
-            let partyLedEntryId: number | null = null;
+            const ledEntryIdByLedger = new Map<number, number>();
             for (const led of data.ledgers || []) {
                 if (!led.ledger_id || !led.amount) continue;
                 const ledRes = await this.db.execute(
@@ -2206,11 +2450,28 @@ export class VouchersService implements OnModuleInit {
                     [vchId, led.ledger_id, led.amount],
                     conn,
                 );
-                if (led.ledger_id === data.party_ledger_id && partyLedEntryId === null) {
-                    partyLedEntryId = ledRes.insertId;
+                if (!ledEntryIdByLedger.has(led.ledger_id)) {
+                    ledEntryIdByLedger.set(led.ledger_id, ledRes.insertId);
                 }
             }
-            if (normalizedBA && normalizedBA.length > 0) {
+
+            const baByLedger = new Map<number, Array<{ amount: number; direction?: string; type?: string; refno?: string }>>();
+            for (const ba of data.bill_allocation || []) {
+                const ledgerId = (ba as any).ledger_id ?? data.party_ledger_id;
+                if (!baByLedger.has(ledgerId)) baByLedger.set(ledgerId, []);
+                baByLedger.get(ledgerId)!.push(ba);
+            }
+            for (const [ledgerId, entries] of baByLedger) {
+                const led = (data.ledgers || []).find(l => l.ledger_id === ledgerId);
+                // Auto-heal stale bill_alloc totals so a re-saved legacy voucher
+                // ends up with allocations matching its own ledger amount.
+                const normalizedBA = this.normalizeBillAllocation(
+                    led?.amount ?? 0,
+                    entries,
+                    data.vch_no || null,
+                );
+                const ledEntryId = ledEntryIdByLedger.get(ledgerId) ?? null;
+                if (!normalizedBA || normalizedBA.length === 0) continue;
                 for (const ba of normalizedBA) {
                     if (!ba.amount) continue;
                     const signedAmt = ba.direction
@@ -2218,7 +2479,7 @@ export class VouchersService implements OnModuleInit {
                         : (ba.type === 'Agr.' ? -Math.abs(ba.amount) : Math.abs(ba.amount));
                     await this.db.execute(
                         `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
-                        [vchId, partyLedEntryId, data.party_ledger_id, ba.refno || null, signedAmt], conn,
+                        [vchId, ledEntryId, ledgerId, ba.refno || null, signedAmt], conn,
                     );
                 }
             }

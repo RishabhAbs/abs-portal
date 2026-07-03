@@ -49,10 +49,16 @@ const TaskReport: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [checkInBusyId, setCheckInBusyId] = useState<number | null>(null);
     const [checkOutSubmitting, setCheckOutSubmitting] = useState(false);
+    const [recordingVisitId, setRecordingVisitId] = useState<number | null>(null);
+    const [recordingSeconds, setRecordingSeconds] = useState(0);
+    const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     // Synchronous refs — setState is async, so rapid taps can slip past the state
     // guard before React re-renders. Refs update immediately and reliably block it.
     const checkInLockRef = useRef(false);
     const checkOutLockRef = useRef(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const activeStreamRef = useRef<MediaStream | null>(null);
     const pendingToastShownRef = useRef(false);
     const [typeFilter, setTypeFilter] = useState<'all' | 'Development' | 'Implementation' | 'Connect'>('all');
     // 4-tab filter (Call Connect / Visit Connect / External / Self) above the
@@ -637,6 +643,67 @@ const TaskReport: React.FC = () => {
 
     const getCurrentLocation = () => getPreciseLocation();
 
+    const startRecording = async (visitId: number) => {
+        try {
+            if (!navigator.mediaDevices?.getUserMedia) return;
+            // Mono 16kHz — enough for voice, ~60KB/min
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { channelCount: 1, sampleRate: 8000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+            });
+            activeStreamRef.current = stream;
+            audioChunksRef.current = [];
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+            // 8kbps opus — telephone quality, ~60KB/min, perfect for voice
+            const recorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 8000 } : { audioBitsPerSecond: 8000 });
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+            recorder.start(1000);
+            mediaRecorderRef.current = recorder;
+            setRecordingVisitId(visitId);
+            setRecordingSeconds(0);
+            recordingTimerRef.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000);
+        } catch {
+            // Mic denied — recording is optional
+        }
+    };
+
+    const stopAndUploadRecording = async (visitId: number) => {
+        if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+        setRecordingSeconds(0);
+        const recorder = mediaRecorderRef.current;
+        if (!recorder || recorder.state === 'inactive') {
+            activeStreamRef.current?.getTracks().forEach(t => t.stop());
+            activeStreamRef.current = null;
+            setRecordingVisitId(null);
+            return;
+        }
+        return new Promise<void>((resolve) => {
+            recorder.onstop = async () => {
+                // Wait for any pending ondataavailable to fire after requestData
+                await new Promise(r => setTimeout(r, 500));
+                activeStreamRef.current?.getTracks().forEach(t => t.stop());
+                activeStreamRef.current = null;
+                mediaRecorderRef.current = null;
+                setRecordingVisitId(null);
+                const chunks = audioChunksRef.current;
+                audioChunksRef.current = [];
+                if (chunks.length === 0) { showError('Recording', 'No audio chunks captured'); resolve(); return; }
+                const mimeType = chunks[0].type || 'audio/webm';
+                const ext = mimeType.includes('ogg') ? '.ogg' : mimeType.includes('mp4') ? '.mp4' : '.webm';
+                const blob = new Blob(chunks, { type: mimeType });
+                showSuccess('Recording', `Uploading ${chunks.length} chunks, ${Math.round(blob.size/1024)}KB`);
+                try {
+                    await visitsApi.uploadRecording(visitId, blob, ext);
+                    showSuccess('Recording saved', 'Audio uploaded successfully');
+                } catch (e: any) { showError('Recording upload failed', e.message || 'Unknown error'); }
+                resolve();
+            };
+            try { recorder.requestData(); } catch { /* flush buffered audio */ }
+            recorder.stop();
+        });
+    };
+
     const handleCheckIn = async (task: TaskData) => {
         if (checkInLockRef.current) return; // synchronous double-click guard
         checkInLockRef.current = true;
@@ -680,6 +747,7 @@ const TaskReport: React.FC = () => {
                 }]);
             }
             showSuccess('Checked In', 'Location and time recorded successfully');
+            await startRecording(task.id);
             fetchData();
         } catch (e: any) {
             showError('Check-in Failed', e.message || 'Could not fetch location');
@@ -834,6 +902,7 @@ const TaskReport: React.FC = () => {
                 }
             }
 
+            await stopAndUploadRecording(task.id).catch(() => {});
             showSuccess('Checked Out', 'Task completed successfully');
             setCheckoutModal(null);
             fetchData();
@@ -1147,8 +1216,20 @@ const TaskReport: React.FC = () => {
                     </div>
                 </div>
             )}
+            {/* Recording indicator bar */}
+            {recordingVisitId && (
+                <div className="fixed top-0 left-0 right-0 z-50 bg-red-600 text-white flex items-center justify-center gap-3 py-2 text-sm font-semibold shadow-lg">
+                    <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+                    <span>Recording in progress</span>
+                    <span className="font-mono bg-red-700 px-2 py-0.5 rounded text-xs">
+                        {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:{String(recordingSeconds % 60).padStart(2, '0')}
+                    </span>
+                    <span className="text-red-200 text-xs">· Auto-saves on checkout</span>
+                </div>
+            )}
+
             {/* Header / Top Bar */}
-            <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+            <div className={`bg-white border-b border-gray-200 sticky z-10 ${recordingVisitId ? 'top-9' : 'top-0'}`}>
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     {/* ─────────── MOBILE HEADER (clean 2 rows) ─────────── */}
                     <div className="md:hidden">
@@ -1327,7 +1408,7 @@ const TaskReport: React.FC = () => {
                     filtered.map(t => {
                         const swipeActions = [
                             ...(canCheckinVisit(t) && !isExternalTask(t) && !t.check_in_date && t.status === 'In Progress' ? [{ label: 'Check In', color: 'bg-blue-500', onClick: () => handleCheckIn(t) }] : []),
-                            ...(canCheckinVisit(t) && !isExternalTask(t) && t.check_in_date && t.status === 'In Progress' && !t.check_out_time ? [{ label: 'Check Out', color: 'bg-emerald-500', onClick: () => handleCheckOut(t) }] : []),
+                            ...(canCheckinVisit(t) && !isExternalTask(t) && t.check_in_date && t.status === 'In Progress' && !t.check_out_time ? [{ label: recordingVisitId === t.id ? '● Out' : 'Check Out', color: 'bg-emerald-500', onClick: () => handleCheckOut(t) }] : []),
                             ...(canPauseVisit(t) && t.task_type === 'Connect' && !t.check_in_date && t.status !== 'Completed' && t.status === 'In Progress' ? [{ label: 'Pause', color: 'bg-amber-500', onClick: () => handleTaskStatusUpdate(t, 'Pending') }] : []),
                             ...(canPauseVisit(t) && t.task_type === 'Connect' && !t.check_in_date && t.status !== 'Completed' && t.status !== 'In Progress' ? [{ label: 'Resume', color: 'bg-blue-500', onClick: () => handleTaskStatusUpdate(t, 'In Progress') }] : []),
                             ...(t.source === 'tdl' ? [{ label: 'Update', color: 'bg-purple-500', onClick: () => openUpdateTaskModal(t) }] : []),
@@ -1419,7 +1500,10 @@ const TaskReport: React.FC = () => {
                                                         !t.check_in_date ? (
                                                             <button onClick={() => handleCheckIn(t)} disabled={checkInBusyId === t.id} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase active:scale-95 shadow-sm hover:bg-blue-700 transition-all inline-flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed">{checkInBusyId === t.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'In'}</button>
                                                         ) : (!t.check_out_time && t.status === 'In Progress') ? (
-                                                            <button onClick={() => handleCheckOut(t)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase active:scale-95 shadow-sm hover:bg-emerald-700 transition-all">Out</button>
+                                                            <button onClick={() => handleCheckOut(t)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase active:scale-95 shadow-sm hover:bg-emerald-700 transition-all inline-flex items-center gap-1">
+                                                                {recordingVisitId === t.id && <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />}
+                                                                Out
+                                                            </button>
                                                         ) : null
                                                     )}
                                                     {t.source === 'tdl' && <button onClick={() => openUpdateTaskModal(t)} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg border border-transparent hover:border-purple-100 transition-all" title="Update"><MessageSquare className="h-5 w-5" /></button>}
@@ -1528,11 +1612,14 @@ const TaskReport: React.FC = () => {
                                 <tr><td colSpan={20} className="text-center py-20 text-gray-400 font-bold uppercase tracking-widest text-sm">No history found</td></tr>
                             ) : (
                                 filteredCompletedTasks.map((t, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                    <tr key={idx} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => openCompletedTask(t)}>
                                          {colPermsCompleted.isVisible('checkout_date') && <td className="px-4 py-3 border-r font-medium text-gray-500 text-sm md:text-sm" style={colPermsCompleted.cellStyle('checkout_date')} onContextMenu={colPermsCompleted.onCellContextMenu('checkout_date')}>
-                                             {formatDate(t.check_out_time || t.completion_date)}
+                                             <div className="flex items-center gap-1.5">
+                                                 {t.recording_path && <span title="Has recording" className="w-2 h-2 rounded-full bg-red-400 shrink-0" />}
+                                                 {formatDate(t.check_out_time || t.completion_date)}
+                                             </div>
                                          </td>}
-                                         {colPermsCompleted.isVisible('customer') && <td className="px-4 py-3 border-r font-bold text-gray-900 text-base md:text-sm" style={colPermsCompleted.cellStyle('customer')} onContextMenu={colPermsCompleted.onCellContextMenu('customer')}><CustomerNameLink customerId={t.customer_id} name={t.customer_name} /></td>}
+                                         {colPermsCompleted.isVisible('customer') && <td className="px-4 py-3 border-r font-bold text-gray-900 text-base md:text-sm" style={colPermsCompleted.cellStyle('customer')} onContextMenu={colPermsCompleted.onCellContextMenu('customer')} onClick={e => e.stopPropagation()}><CustomerNameLink customerId={t.customer_id} name={t.customer_name} /></td>}
                                          {colPermsCompleted.isVisible('staff') && <td className="px-4 py-3 border-r text-gray-600 text-base md:text-sm font-medium" style={colPermsCompleted.cellStyle('staff')} onContextMenu={colPermsCompleted.onCellContextMenu('staff')}>{t.user_name}</td>}
                                          {colPermsCompleted.isVisible('type') && <td className="px-4 py-3 border-r text-base md:text-sm" style={colPermsCompleted.cellStyle('type')} onContextMenu={colPermsCompleted.onCellContextMenu('type')}>{t.visit_type || t.task_type}</td>}
                                          {colPermsCompleted.isVisible('in_time') && <td className="px-4 py-3 border-r text-center font-medium text-gray-500 text-sm md:text-sm" style={colPermsCompleted.cellStyle('in_time')} onContextMenu={colPermsCompleted.onCellContextMenu('in_time')}>{formatTime(t.check_in_time)}</td>}
@@ -1766,6 +1853,14 @@ const TaskReport: React.FC = () => {
                                         </div>
                                     </div>
                                 </>
+                            )}
+
+                            {/* Recording playback */}
+                            {viewCompletedTask.recording_path && (
+                                <div className="px-4 pb-3">
+                                    <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Visit Recording</p>
+                                    <audio controls className="w-full" src={visitsApi.getRecordingUrl(viewCompletedTask.id, viewCompletedTask.recording_path)} />
+                                </div>
                             )}
 
                             {/* Footer */}

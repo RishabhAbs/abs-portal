@@ -405,12 +405,12 @@ export default function PendingReview() {
                     <td className={`${cell} text-slate-600 whitespace-nowrap tabular-nums`}>{displayDate(row.vch_date)}</td>
                     <td className={`${cell} font-medium text-slate-800`}>{row.party_name || '—'}</td>
                     <td className={`${cell} whitespace-nowrap`}>
-                      {row.vch_no ? (
-                        <button onClick={() => openVoucher(row.id)}
-                          className="text-blue-600 hover:text-blue-800 hover:underline font-medium">
-                          {row.vch_no}
-                        </button>
-                      ) : <span className="text-slate-400">—</span>}
+                      <button onClick={() => openVoucher(row.id)}
+                        className={row.vch_no
+                          ? "text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                          : "text-slate-400 hover:text-blue-600 hover:underline cursor-pointer"}>
+                        {row.vch_no || '—'}
+                      </button>
                     </td>
                     <td className={`${cell} text-slate-700`}>
                       {row.vch_subtype_name && row.vch_subtype_name !== row.vch_type_name

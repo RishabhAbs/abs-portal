@@ -528,19 +528,39 @@ export class DashboardService {
     const fields = ['new_target','tss','cloud','tdl','app','visit','call'];
     const TYPE_COLS = ['new_target_type','tss_type','cloud_type','tdl_type','app_type','visit_type','call_type'];
 
+    // Load authoritative unit types from item_categories.target_unit
+    const catRows = await this.db.query<any>(`SELECT name, target_unit FROM item_categories`).catch(() => [] as any[]);
+    const catUnits: Record<string, 'qty' | 'amount'> = {
+      // Defaults: voucher-item categories are amount-based; activity counts are qty-based
+      tss: 'amount', cloud: 'amount', tdl: 'amount', app: 'amount',
+      new_target: 'qty', visit: 'qty', call: 'qty',
+    };
+    for (const c of catRows) {
+      const g = (c.name || '').toLowerCase();
+      let key: string | null = null;
+      if (g.includes('new'))                           key = 'new_target';
+      else if (g.includes('tss'))                      key = 'tss';
+      else if (g.includes('cloud'))                    key = 'cloud';
+      else if (g.includes('tdl') || g.includes('tally')) key = 'tdl';
+      else if (g.includes('app') || g.includes('web'))   key = 'app';
+      else if (g.includes('visit'))                       key = 'visit';
+      else if (g.includes('call'))                        key = 'call';
+      if (key) catUnits[key] = c.target_unit === 'amount' ? 'amount' : 'qty';
+    }
+
     // Plans: sum from user_targets for MTD/QTD/FY
     const planCols = fields.map(f => `COALESCE(SUM(\`${f}\`),0) AS \`${f}\``).join(', ');
 
-    // Classify by item_categories.name only — the team is still tagging items,
-    // so we intentionally don't fall back to item_name or broaden keywords.
-    // Uncategorized items are excluded so the dashboard shows the real tagged coverage.
-    const matchCat = (categoryName: string): string | null => {
-      const g = (categoryName || '').toLowerCase();
-      if (g.includes('new'))                      return 'new_target';
-      if (g.includes('tss'))                      return 'tss';
-      if (g.includes('cloud'))                    return 'cloud';
-      if (g.includes('tdl'))                      return 'tdl';
-      if (g.includes('app') || g.includes('web')) return 'app';
+    // Classify by category name, group name, or item name keywords.
+    const matchCat = (name: string): string | null => {
+      const g = (name || '').toLowerCase();
+      if (g.includes('new'))                           return 'new_target';
+      if (g.includes('tss'))                           return 'tss';
+      if (g.includes('cloud') || g.includes('google workspace') || g.includes('aws') || g.includes('ts plus') || g.includes('tsplus')) return 'cloud';
+      if (g.includes('tdl') || g.includes('tally'))   return 'tdl';
+      if (g.includes('app') || g.includes('web'))      return 'app';
+      if (g.includes('visit'))                         return 'visit';
+      if (g.includes('call'))                          return 'call';
       return null;
     };
 
@@ -554,35 +574,51 @@ export class DashboardService {
     const userId = userRow?.id || null;
 
     const achievedByGroup = async (startDate: string, endDate: string) => {
-      const rows = await this.db.query<any>(
-        // Sales vouchers store inventory qty & amount as NEGATIVE (stock-out sign convention),
-        // so wrap SUMs in ABS() to surface the positive achievement number.
-        `SELECT ic.name AS category_name,
-                ABS(COALESCE(SUM(ie.qty),    0)) AS total_qty,
-                ABS(COALESCE(SUM(ie.amount), 0)) AS total_amount
-           FROM vch_details v
-           JOIN vchtype vt            ON v.vch_type_id = vt.id
-           LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
-           JOIN ledger_entries le     ON le.vch_id     = v.id
-           JOIN inventory_entries ie  ON ie.led_id     = le.id
-           JOIN items i               ON ie.item_id    = i.id
-           JOIN item_categories ic    ON ic.id         = i.category_id
-          WHERE COALESCE(p.name, vt.name) = 'Sales'
-            AND (v.created_by = ? OR v.created_by = ?)
-            AND v.vch_date BETWEEN ? AND ?
-          GROUP BY ic.id, ic.name`,
-        [userName, userId, startDate, endDate],
-      ).catch(() => [] as any[]);
+      const [vchRows, cloudRow] = await Promise.all([
+        this.db.query<any>(
+          `SELECT ic.name AS category_name, ig.name AS group_name, i.item_name,
+                  ABS(COALESCE(SUM(ie.qty), 0)) AS total_qty,
+                  ABS(COALESCE(SUM(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100)), 0)) AS total_amount
+             FROM vch_details v
+             JOIN vchtype vt            ON v.vch_type_id = vt.id
+             LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
+             JOIN ledger_entries le     ON le.vch_id     = v.id
+             JOIN inventory_entries ie  ON ie.led_id     = le.id
+             JOIN items i               ON ie.item_id    = i.id
+             LEFT JOIN item_categories ic ON ic.id       = i.category_id
+             LEFT JOIN item_groups ig    ON ig.id         = i.item_group_id
+            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Debit Note', 'Purchase')
+              AND (v.created_by = ? OR v.created_by = ?)
+              AND v.vch_date BETWEEN ? AND ?
+            GROUP BY i.id, i.item_name, ic.id, ic.name, ig.id, ig.name`,
+          [userName, userId, startDate, endDate],
+        ).catch(() => [] as any[]),
+        // Cloud achievement comes from cloud_activities.bill_amount (Sales/Tax Invoice)
+        // No user attribution in cloud_activities — show company total for all users
+        this.db.queryOne<any>(
+          `SELECT COALESCE(SUM(bill_amount), 0) AS cloud_total
+             FROM cloud_activities
+            WHERE record_nature = 'Sales' AND bill_type = 'Tax Invoice'
+              AND activity_date BETWEEN ? AND ?`,
+          [startDate, endDate],
+        ).catch(() => null),
+      ]);
 
-      // Fold rows → per-category {qty, amount}; uncategorized items are excluded by the INNER JOIN above
       const bucket: Record<string, { qty: number; amount: number }> = {};
       for (const f of fields) bucket[f] = { qty: 0, amount: 0 };
-      for (const r of rows) {
-        const cat = matchCat(r.category_name);
+      for (const r of vchRows) {
+        const catFromCategory = matchCat(r.category_name);
+        const isUnclassified = !catFromCategory || (r.category_name || '').toLowerCase() === 'others';
+        const cat = isUnclassified
+          ? (matchCat(r.item_name) ?? matchCat(r.group_name) ?? catFromCategory)
+          : catFromCategory;
         if (!cat) continue;
         bucket[cat].qty    += Number(r.total_qty || 0);
         bucket[cat].amount += Number(r.total_amount || 0);
       }
+      // Override cloud with cloud_activities total
+      bucket['cloud'].amount = Number(cloudRow?.cloud_total || 0);
+      bucket['cloud'].qty    = 0;
       return bucket;
     };
 
@@ -608,9 +644,9 @@ export class DashboardService {
       achievedByGroup(fyStart,  today),
     ]);
 
-    // Pick qty vs amount based on this user's per-category unit_type (default 'qty')
+    // Pick qty vs amount — category-level target_unit is authoritative, fall back to per-user stored type
     const pick = (bucket: Record<string, { qty: number; amount: number }>, field: string) => {
-      const unit = unitRow?.[`${field}_type`] || 'qty';
+      const unit = catUnits[field] ?? (unitRow?.[`${field}_type`] || 'qty');
       return unit === 'amount' ? bucket[field].amount : bucket[field].qty;
     };
 
@@ -679,45 +715,60 @@ export class DashboardService {
     };
     type Cat = typeof fields[number];
 
-    const matchCat = (categoryName: string): Cat | null => {
-      const g = (categoryName || '').toLowerCase();
-      if (g.includes('new'))                      return 'new_target';
-      if (g.includes('tss'))                      return 'tss';
-      if (g.includes('cloud'))                    return 'cloud';
-      if (g.includes('tdl'))                      return 'tdl';
-      if (g.includes('app') || g.includes('web')) return 'app';
+    const matchCat = (name: string): Cat | null => {
+      const g = (name || '').toLowerCase();
+      if (g.includes('new'))                           return 'new_target';
+      if (g.includes('tss'))                           return 'tss';
+      if (g.includes('cloud') || g.includes('google workspace') || g.includes('aws') || g.includes('ts plus') || g.includes('tsplus')) return 'cloud';
+      if (g.includes('tdl') || g.includes('tally'))   return 'tdl';
+      if (g.includes('app') || g.includes('web'))      return 'app';
+      if (g.includes('visit'))                         return 'visit';
+      if (g.includes('call'))                          return 'call';
       return null;
     };
 
     // Run the voucher query once for a date range, grouped by (created_by, item_category).
     // Returns nested map: user -> cat -> {qty, amount}.
     const achievedAllUsers = async (startDate: string, endDate: string) => {
-      // vch_details.created_by may be either cloud_users.id (e.g. "USR003") or the
-      // display name (legacy). LEFT JOIN + COALESCE so the map is always keyed by
-      // the display name, matching user_targets.user_name and cloud_users.name.
-      const rows = await this.db.query<any>(
-        `SELECT COALESCE(cu.name, v.created_by) AS user_name,
-                ic.name                          AS category_name,
-                ABS(COALESCE(SUM(ie.qty),    0)) AS total_qty,
-                ABS(COALESCE(SUM(ie.amount), 0)) AS total_amount
-           FROM vch_details v
-           JOIN vchtype vt            ON v.vch_type_id = vt.id
-           LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
-           LEFT JOIN cloud_users cu   ON cu.id         = v.created_by
-           JOIN ledger_entries le     ON le.vch_id     = v.id
-           JOIN inventory_entries ie  ON ie.led_id     = le.id
-           JOIN items i               ON ie.item_id    = i.id
-           JOIN item_categories ic    ON ic.id         = i.category_id
-          WHERE COALESCE(p.name, vt.name) = 'Sales'
-            AND v.vch_date BETWEEN ? AND ?
-            AND v.created_by IS NOT NULL
-          GROUP BY COALESCE(cu.name, v.created_by), ic.id, ic.name`,
-        [startDate, endDate],
-      ).catch(() => [] as any[]);
+      const [rows, cloudRow] = await Promise.all([
+        this.db.query<any>(
+          `SELECT COALESCE(cu.name, v.created_by) AS user_name,
+                  ic.name AS category_name, ig.name AS group_name, i.item_name,
+                  ABS(COALESCE(SUM(ie.qty), 0)) AS total_qty,
+                  ABS(COALESCE(SUM(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100)), 0)) AS total_amount
+             FROM vch_details v
+             JOIN vchtype vt            ON v.vch_type_id = vt.id
+             LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
+             LEFT JOIN cloud_users cu   ON cu.id         = v.created_by
+             JOIN ledger_entries le     ON le.vch_id     = v.id
+             JOIN inventory_entries ie  ON ie.led_id     = le.id
+             JOIN items i               ON ie.item_id    = i.id
+             LEFT JOIN item_categories ic ON ic.id       = i.category_id
+             LEFT JOIN item_groups ig    ON ig.id         = i.item_group_id
+            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Debit Note', 'Purchase')
+              AND v.vch_date BETWEEN ? AND ?
+              AND v.created_by IS NOT NULL
+            GROUP BY COALESCE(cu.name, v.created_by), i.id, i.item_name, ic.id, ic.name, ig.id, ig.name`,
+          [startDate, endDate],
+        ).catch(() => [] as any[]),
+        // Cloud has no per-user attribution — use company-wide cloud_activities total
+        this.db.queryOne<any>(
+          `SELECT COALESCE(SUM(bill_amount), 0) AS cloud_total
+             FROM cloud_activities
+            WHERE record_nature = 'Sales' AND bill_type = 'Tax Invoice'
+              AND activity_date BETWEEN ? AND ?`,
+          [startDate, endDate],
+        ).catch(() => null),
+      ]);
 
+      const cloudTotal = Number(cloudRow?.cloud_total || 0);
       const byUser: Record<string, Record<Cat, { qty: number; amount: number }>> = {};
       for (const r of rows) {
-        const cat = matchCat(r.category_name);
+        const catFromCategory = matchCat(r.category_name);
+        const isUnclassified = !catFromCategory || (r.category_name || '').toLowerCase() === 'others';
+        const cat = isUnclassified
+          ? (matchCat(r.item_name) ?? matchCat(r.group_name) ?? catFromCategory)
+          : catFromCategory;
         if (!cat) continue;
         const u = r.user_name;
         if (!byUser[u]) {
@@ -727,6 +778,11 @@ export class DashboardService {
         byUser[u][cat].qty    += Number(r.total_qty || 0);
         byUser[u][cat].amount += Number(r.total_amount || 0);
       }
+      // Inject cloud_activities total into a synthetic '__company__' key
+      // so the admin rollup can pick it up regardless of per-user breakdown
+      byUser['__company__'] = {} as any;
+      for (const f of fields) byUser['__company__'][f] = { qty: 0, amount: 0 };
+      byUser['__company__']['cloud'].amount = cloudTotal;
       return byUser;
     };
 
@@ -735,6 +791,25 @@ export class DashboardService {
     // consistency.
     const planSelectCols = fields.map(f => `\`${f}\``).join(', ');
     const typeSelectCols = fields.map(f => `\`${f}_type\``).join(', ');
+
+    // Load authoritative unit types from item_categories.target_unit
+    const adminCatRows = await this.db.query<any>(`SELECT name, target_unit FROM item_categories`).catch(() => [] as any[]);
+    const adminCatUnits: Record<string, 'qty' | 'amount'> = {
+      tss: 'amount', cloud: 'amount', tdl: 'amount', app: 'amount',
+      new_target: 'qty', visit: 'qty', call: 'qty',
+    };
+    for (const c of adminCatRows) {
+      const g = (c.name || '').toLowerCase();
+      let key: string | null = null;
+      if (g.includes('new'))                           key = 'new_target';
+      else if (g.includes('tss'))                      key = 'tss';
+      else if (g.includes('cloud'))                    key = 'cloud';
+      else if (g.includes('tdl') || g.includes('tally')) key = 'tdl';
+      else if (g.includes('app') || g.includes('web'))   key = 'app';
+      else if (g.includes('visit'))                       key = 'visit';
+      else if (g.includes('call'))                        key = 'call';
+      if (key) adminCatUnits[key] = c.target_unit === 'amount' ? 'amount' : 'qty';
+    }
 
     const [usersList, planRows, unitRows, mtdAch, qtdAch, fyAch, prevMtdAch] = await Promise.all([
       this.db.query<any>(`SELECT name FROM cloud_users WHERE status = 'active' ORDER BY name`)
@@ -784,7 +859,8 @@ export class DashboardService {
 
     const pick = (user: string, cat: Cat, bucket?: { qty: number; amount: number }) => {
       if (!bucket) return 0;
-      const unit = unitByUser[user]?.[cat] || 'qty';
+      // Category-level target_unit is authoritative; fall back to per-user stored type
+      const unit = adminCatUnits[cat] ?? (unitByUser[user]?.[cat] || 'qty');
       return unit === 'amount' ? bucket.amount : bucket.qty;
     };
 
@@ -810,7 +886,7 @@ export class DashboardService {
           mtd: { actual: mtdA[f], plan: plan.mtd[f] },
           qtd: { actual: qtdA[f], plan: plan.qtd[f] },
           fy:  { actual: fyA[f],  plan: plan.fy[f]  },
-          unit: unitByUser[userName]?.[f] || 'qty',
+          unit: adminCatUnits[f] ?? (unitByUser[userName]?.[f] || 'qty'),
           prev_mtd_actual: prevMtdA[f],
         };
       }
@@ -848,11 +924,14 @@ export class DashboardService {
     // read as 0 when name-matching is off (e.g. Tally sync using a username
     // that doesn't exist in cloud_users).
     const rollupActual = (ach: typeof mtdAch, cat: Cat): number => {
+      // Cloud is tracked company-wide via cloud_activities — use __company__ bucket
+      if (cat === 'cloud') return ach['__company__']?.['cloud']?.amount ?? 0;
       let total = 0;
       for (const userName of Object.keys(ach)) {
+        if (userName === '__company__') continue;
         const bucket = ach[userName]?.[cat];
         if (!bucket) continue;
-        const unit = unitByUser[userName]?.[cat] || 'qty';
+        const unit = adminCatUnits[cat] ?? (unitByUser[userName]?.[cat] || 'qty');
         total += unit === 'amount' ? bucket.amount : bucket.qty;
       }
       return total;

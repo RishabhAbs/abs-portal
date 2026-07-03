@@ -20,8 +20,9 @@ export class VouchersController {
     )
     async create(@Body() body: any, @Request() req: any) {
         console.log('[Voucher] create body:', JSON.stringify(body));
+        const isStockJournal = Array.isArray(body.stock_source) || Array.isArray(body.stock_destination);
         const partyId = parseInt(body.party_ledger_id, 10);
-        if (!partyId || isNaN(partyId)) throw new BadRequestException('party_ledger_id is required and must be a valid number');
+        if (!isStockJournal && (!partyId || isNaN(partyId))) throw new BadRequestException('party_ledger_id is required and must be a valid number');
         this.checkVchTypePermission(req, body.vch_type_id);
         const createdBy = req.user?.id ?? req.user?.userId ?? null;
         const result = await this.vouchersService.create({ ...body, created_by: createdBy });
@@ -100,10 +101,10 @@ export class VouchersController {
         { entity: 'activities', action: 'view' },
         { entity: 'activities', action: 'create' },
     )
-    async getNextNo(@Query('vch_type_id') vchTypeId: string) {
+    async getNextNo(@Query('vch_type_id') vchTypeId: string, @Query('for_date') forDate?: string) {
         const id = parseInt(vchTypeId, 10);
         if (!id) return { success: true, data: '' };
-        const vch_no = await this.vouchersService.getNextVoucherNo(id);
+        const vch_no = await this.vouchersService.getNextVoucherNo(id, forDate || undefined);
         return { success: true, data: vch_no };
     }
 
@@ -314,8 +315,9 @@ export class VouchersController {
         { entity: 'activities', action: 'edit' },
     )
     async update(@Param('id', ParseIntPipe) id: number, @Body() body: any, @Request() req: any) {
+        const isStockJournal = Array.isArray(body.stock_source) || Array.isArray(body.stock_destination);
         const partyId = parseInt(body.party_ledger_id, 10);
-        if (!partyId || isNaN(partyId)) throw new BadRequestException('party_ledger_id is required');
+        if (!isStockJournal && (!partyId || isNaN(partyId))) throw new BadRequestException('party_ledger_id is required');
         this.checkVchTypePermission(req, body.vch_type_id);
         const isAdmin = req.user?.role?.toLowerCase() === 'admin';
         const result = await this.vouchersService.update(id, { ...body, created_by: req.user?.id ?? null }, isAdmin);

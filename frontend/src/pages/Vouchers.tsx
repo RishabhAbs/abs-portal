@@ -163,11 +163,14 @@ interface JournalRow {
   search: string;
   open: boolean;
   results: any[];
+  billByBill: boolean;
+  billAlloc: { id: string; type: 'New' | 'Agr.' | 'On Account'; refno: string; amount: number; direction?: string; refSearch?: string; refOpen?: boolean }[];
 }
 
 const emptyJournalRow = (): JournalRow => ({
   id: uid(), drOrCr: 'Dr', ledger_id: null, ledger_name: '',
   dr_amount: 0, cr_amount: 0, search: '', open: false, results: [],
+  billByBill: false, billAlloc: [],
 });
 
 const emptyLine = (): LineItem => ({
@@ -207,6 +210,221 @@ interface VchTypeItem {
   parent_name: string | null;
   is_system: number;
 }
+
+interface StockLine { id: string; item_id: string | null; item_name: string; search: string; open: boolean; qty: number; rate: number; amount: number; gst_rate: number; batch_yes: boolean; batch_rows: { id: string; batch_name: string; qty: number; rate: number; amount: number }[]; results?: any[] }
+const emptyStockLine = (): StockLine => ({ id: uid(), item_id: null, item_name: '', search: '', open: false, qty: 0, rate: 0, amount: 0, gst_rate: 0, batch_yes: false, batch_rows: [] });
+const emptyBatchRow = () => ({ id: uid(), batch_name: '', qty: 0, rate: 0, amount: 0 });
+const fmt = (n: number) => n.toFixed(2);
+
+// Batch popup — opened when clicking the batch button on a stock line
+interface StockBatchPopupProps {
+  line: StockLine;
+  onSave: (rows: StockLine['batch_rows']) => void;
+  onClose: () => void;
+}
+const StockBatchPopup: React.FC<StockBatchPopupProps> = ({ line, onSave, onClose }) => {
+  const [rows, setRows] = React.useState<StockLine['batch_rows']>(
+    line.batch_rows.length ? line.batch_rows : [emptyBatchRow()]
+  );
+  const totQty = rows.reduce((s, b) => s + b.qty, 0);
+  const totAmt = rows.reduce((s, b) => s + b.amount, 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl mx-4 flex flex-col" style={{ maxHeight: '80vh' }}>
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-4 pb-2 border-b border-gray-100">
+          <div>
+            <p className="text-[10px] uppercase font-semibold text-gray-400 tracking-wider">Batch / Serial Entry</p>
+            <p className="text-base font-bold text-gray-800 mt-0.5">{line.item_name}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 mt-0.5"><X size={18} /></button>
+        </div>
+        {/* Table */}
+        <div className="overflow-y-auto flex-1 px-4 py-3">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] text-gray-500 uppercase border-b border-gray-200">
+                <th className="pb-1.5 text-left w-6">#</th>
+                <th className="pb-1.5 text-left">Serial / Batch No.</th>
+                <th className="pb-1.5 text-right w-20">Qty</th>
+                <th className="pb-1.5 text-right w-20">Rate</th>
+                <th className="pb-1.5 text-right w-24">Amount</th>
+                <th className="pb-1.5 w-5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((br, idx) => (
+                <tr key={br.id} className="border-b border-gray-50">
+                  <td className="py-1.5 text-gray-400 text-xs pr-1">{idx + 1}</td>
+                  <td className="py-1.5 pr-1">
+                    <input autoFocus={idx === 0} type="text" value={br.batch_name} placeholder="Enter serial no."
+                      onChange={e => setRows(p => p.map(b => b.id === br.id ? { ...b, batch_name: e.target.value } : b))}
+                      className="w-full border border-gray-200 rounded py-1 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  </td>
+                  <td className="py-1.5 pr-1">
+                    <input type="number" step="any" value={br.qty || ''} placeholder=""
+                      onChange={e => {
+                        const qty = parseFloat(e.target.value) || 0;
+                        setRows(p => p.map(b => b.id === br.id ? { ...b, qty, amount: +(qty * b.rate).toFixed(2) } : b));
+                      }}
+                      className="w-full border border-gray-200 rounded py-1 px-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  </td>
+                  <td className="py-1.5 pr-1">
+                    <input type="number" step="any" value={br.rate || ''} placeholder=""
+                      onChange={e => {
+                        const rate = parseFloat(e.target.value) || 0;
+                        setRows(p => p.map(b => b.id === br.id ? { ...b, rate, amount: +(b.qty * rate).toFixed(2) } : b));
+                      }}
+                      className="w-full border border-gray-200 rounded py-1 px-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  </td>
+                  <td className="py-1.5 pr-1">
+                    <input type="number" step="any" value={br.amount || ''} placeholder=""
+                      onChange={e => setRows(p => p.map(b => b.id === br.id ? { ...b, amount: parseFloat(e.target.value) || 0 } : b))}
+                      className="w-full border border-gray-200 rounded py-1 px-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400 font-medium" />
+                  </td>
+                  <td className="py-1.5 text-center">
+                    {rows.length > 1 && (
+                      <button onClick={() => setRows(p => p.filter(b => b.id !== br.id))} className="text-red-400 hover:text-red-600"><X size={13} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button onClick={() => setRows(p => [...p, emptyBatchRow()])}
+            className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 mt-2">
+            <Plus size={12} /> Add Serial No.
+          </button>
+        </div>
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+          <div className="text-sm text-gray-600 flex gap-4">
+            <span>Total Qty: <strong>{totQty.toFixed(3)}</strong></span>
+            <span>Total Amt: <strong>₹{totAmt.toFixed(2)}</strong></span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-100">Cancel</button>
+            <button onClick={() => onSave(rows)} className="px-5 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const StockSide: React.FC<{ title: string; lines: StockLine[]; setLines: React.Dispatch<React.SetStateAction<StockLine[]>>; onOpenBatch: (lineId: string) => void }> = ({ title, lines, setLines, onOpenBatch }) => (
+  <div className="flex-1 min-w-0">
+    <div className="text-center text-[11px] font-bold uppercase tracking-wide bg-gray-100 border-b border-gray-300 py-1.5 text-gray-600">{title}</div>
+    <table className="w-full text-sm">
+      <thead className="bg-gray-50">
+        <tr className="text-[11px] text-gray-500 uppercase">
+          <th className="py-1.5 px-2 text-left w-7">#</th>
+          <th className="py-1.5 px-2 text-left">Name of Item</th>
+          <th className="py-1.5 px-2 text-right w-20">Quantity</th>
+          <th className="py-1.5 px-2 text-right w-20">Rate</th>
+          <th className="py-1.5 px-2 text-right w-24">Amount</th>
+          <th className="py-1.5 px-2 w-6"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line, idx) => (
+          <tr key={line.id} className="border-t border-gray-100 hover:bg-gray-50">
+            <td className="py-1 px-2 text-gray-400 text-xs">{idx + 1}</td>
+            <td className="py-1 px-1">
+              <div className="relative">
+                <input type="text" value={line.search}
+                  onChange={e => {
+                    const q = e.target.value;
+                    setLines(p => p.map(l => l.id === line.id ? { ...l, search: q, item_id: null, item_name: '', open: q.length >= 1, batch_yes: false, batch_rows: [] } : l));
+                    if (q.length >= 1) {
+                      itemsApi.getAll().then((res: any) => {
+                        const all = res?.data || res || [];
+                        const list = all.filter((it: any) => (it.item_name || '').toLowerCase().includes(q.toLowerCase()));
+                        setLines(p => p.map(l => l.id === line.id ? { ...l, results: list, open: true } : l));
+                      }).catch(() => {});
+                    }
+                  }}
+                  onBlur={() => setTimeout(() => setLines(p => p.map(l => l.id === line.id ? { ...l, open: false } : l)), 200)}
+                  placeholder="Search item..."
+                  className={`w-full border rounded text-sm py-1 px-2 focus:outline-none focus:ring-1 ${line.item_id ? 'border-green-400 bg-green-50' : 'border-gray-200 focus:ring-blue-400'}`}
+                />
+                {line.open && (line.results || []).length > 0 && (
+                  <div className="absolute z-20 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                    {(line.results || []).slice(0, 20).map((it: any) => (
+                      <div key={it.id} onPointerDown={() => {
+                        const batchYes = it.batch === 'Yes';
+                        setLines(p => p.map(l => l.id === line.id ? {
+                          ...l, item_id: String(it.id), item_name: it.item_name, search: it.item_name, open: false,
+                          batch_yes: batchYes, batch_rows: batchYes ? [emptyBatchRow()] : [],
+                        } : l));
+                        if (batchYes) setTimeout(() => onOpenBatch(line.id), 50);
+                      }} className="px-2 py-1.5 text-sm cursor-pointer hover:bg-blue-50 flex items-center justify-between">
+                        <span>{it.item_name}</span>
+                        {it.batch === 'Yes' && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">Batch</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </td>
+            <td className="py-1 px-1">
+              {line.batch_yes ? (
+                <button onClick={() => onOpenBatch(line.id)}
+                  className={`w-full border rounded text-sm py-1 px-1 text-right ${line.batch_rows.length > 0 && line.qty > 0 ? 'border-green-400 bg-green-50 text-green-700' : 'border-orange-300 bg-orange-50 text-orange-600'}`}>
+                  {line.qty > 0 ? line.qty : 'Set →'}
+                </button>
+              ) : (
+                <input type="number" step="any" value={line.qty || ''} placeholder="0"
+                  onChange={e => { const qty = parseFloat(e.target.value) || 0; setLines(p => p.map(l => l.id === line.id ? { ...l, qty, amount: +(qty * l.rate).toFixed(2) } : l)); }}
+                  className="w-full border border-gray-200 rounded text-sm py-1 px-1 text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
+              )}
+            </td>
+            <td className="py-1 px-1">
+              <input type="number" step="any" value={line.rate || ''} placeholder="0.00"
+                onChange={e => { const rate = parseFloat(e.target.value) || 0; setLines(p => p.map(l => l.id === line.id ? { ...l, rate, amount: +(l.qty * rate).toFixed(2) } : l)); }}
+                disabled={line.batch_yes}
+                className="w-full border border-gray-200 rounded text-sm py-1 px-1 text-right focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-50 disabled:text-gray-400" />
+            </td>
+            <td className="py-1 px-1">
+              {line.batch_yes ? (
+                <button onClick={() => onOpenBatch(line.id)}
+                  className={`w-full border rounded text-sm py-1 px-1 text-right font-medium ${line.batch_rows.length > 0 && line.amount > 0 ? 'border-green-400 bg-green-50 text-green-700' : 'border-orange-300 bg-orange-50 text-orange-600'}`}>
+                  {line.amount > 0 ? fmt(line.amount) : 'Set →'}
+                </button>
+              ) : (
+                <input type="number" step="any" value={line.amount || ''} placeholder="0.00"
+                  onChange={e => setLines(p => p.map(l => l.id === line.id ? { ...l, amount: parseFloat(e.target.value) || 0 } : l))}
+                  className="w-full border border-gray-200 rounded text-sm py-1 px-1 text-right focus:outline-none focus:ring-1 focus:ring-blue-400 font-medium" />
+              )}
+            </td>
+            <td className="py-1 px-1 text-center">
+              {lines.length > 1 && (
+                <button onClick={() => setLines(p => p.filter(l => l.id !== line.id))} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr className="border-t border-gray-100">
+          <td colSpan={6} className="py-1 px-2">
+            <button onClick={() => setLines(p => [...p, emptyStockLine()])}
+              className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800">
+              <Plus size={12} /> Add Item
+            </button>
+          </td>
+        </tr>
+        <tr className="border-t-2 border-gray-200 bg-gray-50">
+          <td colSpan={4} className="py-1.5 px-2 text-xs font-semibold text-gray-500 uppercase">Total</td>
+          <td className="py-1.5 px-1 text-right text-sm font-bold text-blue-600">
+            {fmt(lines.reduce((s, l) => s + (l.amount || 0), 0))}
+          </td>
+          <td />
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+);
 
 const Vouchers: React.FC = () => {
   const { user, isAdmin, canCheckPermission, canDelete, canEdit } = useAuth();
@@ -314,6 +532,7 @@ const Vouchers: React.FC = () => {
     activities: any[];
     selectedIds: Set<string>;
     loading: boolean;
+    isCreditNote?: boolean;
   } | null>(null);
   const [activitiesToLink, setActivitiesToLink] = useState<string[]>([]);
 
@@ -382,16 +601,34 @@ const Vouchers: React.FC = () => {
   })();
 
   // Journal mode = Contra / Journal / Payment / Receipt — no inventory, Dr/Cr ledger table
+  const isStockJournal = (() => {
+    const parent = (allVchTypes.find(t => t.id === selectedParentId)?.name || '').toLowerCase();
+    const child = voucherType.toLowerCase();
+    return parent.includes('stock journal') || child.includes('stock journal');
+  })();
+
   const isJournalType = (() => {
+    if (isStockJournal) return false;
     const parent = (allVchTypes.find(t => t.id === selectedParentId)?.name || '').toLowerCase();
     return parent.includes('contra') || parent.includes('journal') || parent.includes('payment') || parent.includes('receipt');
   })();
 
+  // Stock Journal state
+  const [stockSource, setStockSource] = useState<StockLine[]>([emptyStockLine()]);
+  const [stockDest, setStockDest] = useState<StockLine[]>([emptyStockLine()]);
+  // Batch popup: { side: 'src'|'dst', lineId: string } | null
+  const [stockBatchPopup, setStockBatchPopup] = useState<{ side: 'src' | 'dst'; lineId: string } | null>(null);
+  const stockBatchLine = stockBatchPopup
+    ? (stockBatchPopup.side === 'src' ? stockSource : stockDest).find(l => l.id === stockBatchPopup.lineId) ?? null
+    : null;
+
   // Journal rows state
   const [journalRows, setJournalRows] = useState<JournalRow[]>([emptyJournalRow(), emptyJournalRow()]);
   const [mobileStep, setMobileStep] = useState(1);
-  // Which journal row is the "party" (billbybill=Yes) — track ledger_id + amount + side
-  const [journalParty, setJournalParty] = useState<{ ledger_id: number; amount: number; drOrCr: 'Dr' | 'Cr' } | null>(null);
+  // Which journal row's bill-allocation popup is currently open. The popup's
+  // working state (billAllocEntries) is synced into this row's own billAlloc
+  // array so each bill-by-bill row keeps its own independent allocations.
+  const [activeJournalRowId, setActiveJournalRowId] = useState<string | null>(null);
   // When parent changes, reset voucherType to first child
   useEffect(() => {
     const first = allVchTypes.find(t => selectedParentId === null || t.parent_id === selectedParentId || t.id === selectedParentId);
@@ -409,14 +646,14 @@ const Vouchers: React.FC = () => {
     if (params.id) return; // URL-based edit route
     const vtId = childTypes.find(t => t.name === voucherType)?.id || selectedParentId;
     if (!vtId) return;
-    vouchersApi.getNextNo(vtId).then((r: any) => {
+    vouchersApi.getNextNo(vtId, voucherDate).then((r: any) => {
       // Defensive double-check inside the callback in case editId got set
       // mid-flight (state nav).
       if (editId) return;
-      if (r.success && r.data) setVoucherNo(r.data);
+      if (r.success) setVoucherNo(r.data || ''); // clear if manual (empty string)
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voucherType, selectedParentId, editId]);
+  }, [voucherType, selectedParentId, editId, voucherDate]);
 
   // ----- Data loading -----
   useEffect(() => {
@@ -535,14 +772,10 @@ const Vouchers: React.FC = () => {
         const idx = activeDropIdx >= 0 ? activeDropIdx : 0;
         const l = journalOpen.results[idx];
         if (l) {
+          const isBillByBill = l.billbybill === 'Yes';
           setJournalRows(p => p.map(r => r.id === journalOpen.id
-            ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false }
+            ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false, billByBill: isBillByBill, billAlloc: isBillByBill ? r.billAlloc : [] }
             : r));
-          if (l.billbybill === 'Yes') {
-            const amt = journalOpen.drOrCr === 'Dr' ? journalOpen.dr_amount : journalOpen.cr_amount;
-            setJournalParty({ ledger_id: l.id, amount: amt, drOrCr: journalOpen.drOrCr });
-            setBillAllocEntries([]);
-          }
           setActiveDropIdx(-1);
           focusNext(target); // jump to amount column
           return;
@@ -858,36 +1091,75 @@ const Vouchers: React.FC = () => {
         }));
       }
 
-      // 6. Determine if journal type
+      // 6. Determine if journal type / stock journal
       const parentName = (allVchTypes.find(t => t.id === (vt?.parent_id && vt.parent_id !== vt.id ? vt.parent_id : vt?.id))?.name || '').toLowerCase();
-      const isJournal = ['contra','journal','payment','receipt'].some(k => parentName.includes(k) || vt?.name.toLowerCase().includes(k));
+      const vtNameLc = (vt?.name || v.vch_type_name || '').toLowerCase();
+      const isStockJournalEdit = parentName.includes('stock journal') || vtNameLc.includes('stock journal');
+      const isJournal = !isStockJournalEdit && ['contra','journal','payment','receipt'].some(k => parentName.includes(k) || vtNameLc.includes(k));
 
-      if (isJournal) {
-        // Journal rows: all ledger entries as Dr/Cr rows
-        setJournalRows((v.ledgerEntries || []).map((le: any) => ({
-          id: uid(),
-          drOrCr: Number(le.amount) >= 0 ? 'Dr' as const : 'Cr' as const,
-          ledger_id: le.ledger_id,
-          ledger_name: le.ledger_name || '',
-          dr_amount: Number(le.amount) > 0 ? Number(le.amount) : 0,
-          cr_amount: Number(le.amount) < 0 ? Math.abs(Number(le.amount)) : 0,
-          search: le.ledger_name || '',
-          open: false,
-          results: [],
-        })));
-        // Restore journalParty only when the voucher had bill allocations —
-        // otherwise journalBillByBill stays false and re-saving doesn't require
-        // bill allocation (matching how the voucher was originally saved).
-        if ((v.billAllocations?.length ?? 0) > 0) {
-          const partyLe = (v.ledgerEntries || []).find((le: any) => String(le.ledger_id) === String(v.party_ledger_id));
-          if (partyLe) {
-            setJournalParty({
-              ledger_id: Number(partyLe.ledger_id),
-              amount: Math.abs(Number(partyLe.amount)),
-              drOrCr: Number(partyLe.amount) >= 0 ? 'Dr' : 'Cr',
-            });
-          }
+      if (isStockJournalEdit) {
+        // Load source and destination inventory entries from the dummy ledger entry
+        const allInvEntries: any[] = (v.ledgerEntries || []).flatMap((le: any) => le.inventoryEntries || []);
+        const mapStockLine = (ie: any) => {
+          const batchRows = (ie.batchRows || []).map((b: any) => ({
+            id: uid(),
+            batch_name: b.batch_name || '',
+            qty: Math.abs(Number(b.qty)),
+            rate: Number(b.rate),
+            amount: Math.abs(Number(b.amount)),
+          }));
+          return {
+            id: uid(),
+            item_id: String(ie.item_id),
+            item_name: ie.item_name || '',
+            search: ie.item_name || '',
+            open: false,
+            qty: Math.abs(Number(ie.qty)),
+            rate: Number(ie.rate),
+            amount: Math.abs(Number(ie.amount)),
+            gst_rate: Number(ie.gst_rate) || 0,
+            batch_yes: batchRows.length > 0,
+            batch_rows: batchRows,
+          };
+        };
+        const srcEntries = allInvEntries.filter(ie => ie.side === 'source');
+        const dstEntries = allInvEntries.filter(ie => ie.side === 'destination');
+        setStockSource(srcEntries.length ? srcEntries.map(mapStockLine) : [emptyStockLine()]);
+        setStockDest(dstEntries.length ? dstEntries.map(mapStockLine) : [emptyStockLine()]);
+      } else if (isJournal) {
+        // Bill allocations are grouped by their own ledger (bill_allocation.ledger)
+        // so each bill-by-bill ledger row gets back exactly its own allocations,
+        // independent of which ledger happens to be the voucher's party_ledger_id.
+        const allocsByLedger = new Map<string, any[]>();
+        for (const ba of (v.billAllocations || [])) {
+          const key = String(ba.ledger);
+          if (!allocsByLedger.has(key)) allocsByLedger.set(key, []);
+          allocsByLedger.get(key)!.push(ba);
         }
+        // Journal rows: all ledger entries as Dr/Cr rows
+        setJournalRows((v.ledgerEntries || []).map((le: any) => {
+          const rowAllocs = allocsByLedger.get(String(le.ledger_id)) || [];
+          return {
+            id: uid(),
+            drOrCr: Number(le.amount) >= 0 ? 'Dr' as const : 'Cr' as const,
+            ledger_id: le.ledger_id,
+            ledger_name: le.ledger_name || '',
+            dr_amount: Number(le.amount) > 0 ? Number(le.amount) : 0,
+            cr_amount: Number(le.amount) < 0 ? Math.abs(Number(le.amount)) : 0,
+            search: le.ledger_name || '',
+            open: false,
+            results: [],
+            billByBill: rowAllocs.length > 0,
+            billAlloc: rowAllocs.map((ba: any) => ({
+              id: uid(),
+              type: 'Agr.' as const,
+              refno: ba.billname || '',
+              refSearch: ba.billname || '',
+              amount: Math.abs(Number(ba.amount)),
+              direction: Number(ba.amount) >= 0 ? 'Dr' : 'Cr',
+            })),
+          };
+        }));
       } else {
         // Ledger rows for normal mode. Show ALL non-party / non-goods
         // entries, including tax rows (CGST / SGST / IGST / Roundoff), so
@@ -946,8 +1218,9 @@ const Vouchers: React.FC = () => {
         }
       }
 
-      // 7. Bill allocations
-      if (v.billAllocations?.length) {
+      // 7. Bill allocations — non-journal (customer) mode only; journal-mode
+      // allocations were already distributed into each row's own billAlloc above.
+      if (!isJournal && v.billAllocations?.length) {
         setBillAllocEntries(v.billAllocations.map((ba: any) => ({
           id: uid(),
           type: 'Agr.' as const,
@@ -1244,16 +1517,20 @@ const Vouchers: React.FC = () => {
     }, 50);
   }, [cloudPopup?.lineIdx]);
 
-  // Helper: open the cloud picker for a given voucher line. Fetches
-  // pending billing activities for the current customer.
+  // Helper: open the cloud picker for a given voucher line.
+  // Credit Note → fetch purchase activities (server-mapped to customer).
+  // All other types → fetch billing activities (Sales) for the customer.
   const openCloudPopup = async (lineIdx: number) => {
     if (!partyId) {
       showError('Pick customer first', 'Select the customer before adding a Cloud-category item.');
       return;
     }
-    setCloudPopup({ lineIdx, activities: [], selectedIds: new Set(), loading: true });
+    const isCreditNote = voucherType.toLowerCase().includes('credit');
+    setCloudPopup({ lineIdx, activities: [], selectedIds: new Set(), loading: true, isCreditNote });
     try {
-      const res = await activitiesApi.getPendingByCustomer(partyId);
+      const res = isCreditNote
+        ? await activitiesApi.getPendingPurchaseByCustomer(partyId)
+        : await activitiesApi.getPendingByCustomer(partyId);
       const list = res.success ? res.data : [];
       setCloudPopup(prev => prev && prev.lineIdx === lineIdx
         ? { ...prev, activities: list, loading: false }
@@ -1273,7 +1550,10 @@ const Vouchers: React.FC = () => {
       showError('No selection', 'Select at least one activity to bill.');
       return;
     }
-    const total = +selected.reduce((s, a) => s + Number(a.bill_amount || 0), 0).toFixed(2);
+    const getActivityAmt = (a: any) => cloudPopup.isCreditNote
+      ? (Number(a.purchase_amount) > 0 ? Number(a.purchase_amount) : Number(a.bill_amount || 0))
+      : Number(a.bill_amount || 0);
+    const total = +selected.reduce((s, a) => s + getActivityAmt(a), 0).toFixed(2);
     // For Cloud lines: qty=1, rate=total, amount=total. Internally consistent
     // with inventory_entries.qty/rate (which are NOT NULL), but the user only
     // supplies the amount.
@@ -1400,18 +1680,23 @@ const Vouchers: React.FC = () => {
   const journalDrTotal = +journalRows.filter(r => r.drOrCr === 'Dr').reduce((s, r) => s + r.dr_amount, 0).toFixed(2);
   const journalCrTotal = +journalRows.filter(r => r.drOrCr === 'Cr').reduce((s, r) => s + r.cr_amount, 0).toFixed(2);
   const journalBalanced = Math.abs(journalDrTotal - journalCrTotal) < 0.01;
+
+  // The row whose bill-allocation popup is currently open (per-row model).
+  const activeJournalRow = activeJournalRowId ? journalRows.find(r => r.id === activeJournalRowId) ?? null : null;
+  const activeRowAmount = activeJournalRow ? (activeJournalRow.drOrCr === 'Dr' ? activeJournalRow.dr_amount : activeJournalRow.cr_amount) : 0;
+
   const effectiveGrandTotal = isJournalType
-    ? (journalParty ? journalParty.amount : journalDrTotal)
+    ? (activeJournalRow ? activeRowAmount : journalDrTotal)
     : grandTotal;
 
-  // In journal mode, bill allocation required only if a party row has billbybill=Yes
-  const journalBillByBill = isJournalType && journalParty !== null;
+  // Bill allocation required if ANY row has ledger (bill-by-bill rows need popup; non-bill-by-bill get auto On Account)
+  const journalBillByBill = isJournalType && journalRows.some(r => r.ledger_id && (r.dr_amount > 0 || r.cr_amount > 0));
 
   // ----- Bill allocation helpers -----
   // Party direction determines sign of grand total
-  // Journal: use journalParty.drOrCr | Normal: Purchase/Debit Note → Cr, Sales/Credit Note → Dr
+  // Journal: use the active row's drOrCr | Normal: Purchase/Debit Note → Cr, Sales/Credit Note → Dr
   const partyDir: 'Dr' | 'Cr' = isJournalType
-    ? (journalParty?.drOrCr ?? 'Cr')
+    ? (activeJournalRow ? activeJournalRow.drOrCr : 'Cr')
     : (isPurchaseMode ? 'Cr' : 'Dr');
   const signedGrandTotal = partyDir === 'Dr' ? effectiveGrandTotal : -effectiveGrandTotal;
 
@@ -1426,22 +1711,82 @@ const Vouchers: React.FC = () => {
   const billAllocTotal    = Math.abs(billAllocSigned); // absolute for display
   const billAllocBalanced = !(customerBillByBill || journalBillByBill) || Math.abs(billAllocBalance) < 0.01;
 
-  const openBillAlloc = async () => {
-    const snapGrandTotal = effectiveGrandTotal;
-    const snapPartyDir = partyDir;
+  const isRowBillAllocBalanced = (r: JournalRow) => {
+    const amt = r.drOrCr === 'Dr' ? r.dr_amount : r.cr_amount;
+    const signed = r.drOrCr === 'Dr' ? amt : -amt;
+    const allocSigned = r.billAlloc.reduce((s, e) => s + (e.direction === 'Cr' ? -(Number(e.amount) || 0) : (Number(e.amount) || 0)), 0);
+    return Math.abs(signed - allocSigned) < 0.01;
+  };
+
+  // Whether ALL bill-by-bill rows are individually balanced (used to gate submit)
+  const allRowsBillAllocBalanced = !journalBillByBill || journalRows.filter(r => r.billByBill && r.ledger_id && (r.dr_amount > 0 || r.cr_amount > 0)).every(isRowBillAllocBalanced);
+
+  // First bill-by-bill row that still needs allocation
+  const firstBillAllocRowId = (() => {
+    const billByBillRows = journalRows.filter(r => r.billByBill && r.ledger_id && (r.dr_amount > 0 || r.cr_amount > 0));
+    if (billByBillRows.length === 0) return null;
+    const unbalanced = billByBillRows.find(r => !isRowBillAllocBalanced(r));
+    return (unbalanced || billByBillRows[0]).id;
+  })();
+
+  // Opens the bill-alloc popup for the first row that needs it (journal mode)
+  // or the single customer-mode popup. Used by summary/preview screens that
+  // don't have a specific row in context.
+  const openBillAllocAny = () => {
+    if (isJournalType) {
+      if (firstBillAllocRowId) openBillAlloc(firstBillAllocRowId);
+    } else {
+      openCustomerBillAlloc();
+    }
+  };
+
+  // Auto-fill "On Account" for non-bill-by-bill rows silently (no popup needed)
+  const autoFillOnAccount = (rowId: string, amt: number, dir: 'Dr' | 'Cr') => {
+    setJournalRows(p => p.map(r => {
+      if (r.id !== rowId) return r;
+      const entry = { id: uid(), type: 'On Account' as const, refno: '', amount: amt, direction: dir };
+      return { ...r, billAlloc: [entry] };
+    }));
+  };
+
+  // Non-journal (Sales/Purchase/etc.) single-party bill allocation — unchanged
+  // from the original single-party model since customers only have ONE party ledger.
+  const openCustomerBillAlloc = async () => {
+    const snapGrandTotal = grandTotal;
+    const snapPartyDir: 'Dr' | 'Cr' = isPurchaseMode ? 'Cr' : 'Dr';
     if (billAllocEntries.length === 0) {
       setBillAllocEntries([{ id: uid(), type: 'New', refno: voucherNo || '', amount: snapGrandTotal, direction: snapPartyDir }]);
     }
     setBillAllocOpen(true);
-    // For journal mode use the billbybill party row; otherwise use partyId
-    const lookupId = isJournalType
-      ? journalParty?.ledger_id
-      : parseInt(partyId, 10);
+    const lookupId = parseInt(partyId, 10);
+    if (lookupId) {
+      try {
+        setPendingRefsDir('Cr');
+        const excludeVchId = editVoucherData?.id ? Number(editVoucherData.id) : undefined;
+        const res = await vouchersApi.getPendingRefs(lookupId, 'Cr', excludeVchId);
+        if (res.success) setPendingRefs(res.data);
+      } catch { setPendingRefs([]); }
+    }
+  };
+
+  const openBillAlloc = async (rowId: string) => {
+    const row = journalRows.find(r => r.id === rowId);
+    if (!row) return;
+    const rowAmount = row.drOrCr === 'Dr' ? row.dr_amount : row.cr_amount;
+    const rowDir: 'Dr' | 'Cr' = row.drOrCr;
+    setActiveJournalRowId(rowId);
+    const existing = row.billAlloc.length > 0
+      ? row.billAlloc
+      : [{ id: uid(), type: 'New' as const, refno: voucherNo || '', amount: rowAmount, direction: rowDir }];
+    setBillAllocEntries(existing);
+    setBillAllocOpen(true);
+    // For journal mode use this row's own ledger; otherwise use partyId
+    const lookupId = isJournalType ? row.ledger_id : parseInt(partyId, 10);
     if (lookupId) {
       try {
         // Direction: Cr row = settling outstanding bills (show positive pending)
         //            Dr row = settling credit notes (show negative pending)
-        const direction = isJournalType ? (journalParty?.drOrCr ?? 'Cr') : 'Cr';
+        const direction = isJournalType ? rowDir : 'Cr';
         setPendingRefsDir(direction);
         // When editing, exclude this voucher's own allocations from the netting
         // so the bill it currently settles still appears as pending.
@@ -1456,11 +1801,11 @@ const Vouchers: React.FC = () => {
             setBillAllocEntries(prev => {
               if (prev.length !== 1 || prev[0].type !== 'New') return prev;
               // Prefer a bill whose amount exactly matches; fall back to the first.
-              const exactMatch = res.data.find((p: any) => Math.abs(Number(p.amount) - snapGrandTotal) < 0.01);
+              const exactMatch = res.data.find((p: any) => Math.abs(Number(p.amount) - rowAmount) < 0.01);
               const pick = exactMatch || res.data[0];
               const billDir = pick.direction || (Number(pick.amount) > 0 ? 'Dr' : 'Cr');
               const settleDir: 'Dr' | 'Cr' = billDir === 'Dr' ? 'Cr' : 'Dr';
-              const autoAmt = +Math.min(Number(pick.amount), snapGrandTotal).toFixed(2);
+              const autoAmt = +Math.min(Number(pick.amount), rowAmount).toFixed(2);
               return [{ ...prev[0], type: 'Agr.', refno: pick.billname, refSearch: pick.billname, amount: autoAmt, direction: settleDir }];
             });
           }
@@ -1469,23 +1814,71 @@ const Vouchers: React.FC = () => {
     }
   };
 
-  // Keep a single 'New' bill alloc entry in sync when the party amount changes.
+  const closeBillAlloc = () => { setBillAllocOpen(false); setActiveJournalRowId(null); };
+
+  // Persist the popup's working state back onto the active row's own billAlloc
+  // array so each bill-by-bill row keeps independent allocations.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!activeJournalRowId) return;
+    setJournalRows(prev => prev.map(r => r.id === activeJournalRowId ? { ...r, billAlloc: billAllocEntries } : r));
+  }, [billAllocEntries, activeJournalRowId]);
+
+  // Keep a single 'New' bill alloc entry in sync when the active row's amount changes.
   // This prevents the balance going stale if the user adjusts the amount after
   // bill alloc was auto-populated (only applies to the auto-created New entry).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!journalBillByBill) return;
+    if (!activeJournalRow) return;
     setBillAllocEntries(prev => {
       if (prev.length !== 1 || prev[0].type !== 'New') return prev;
-      const newAmt = journalParty?.amount ?? 0;
+      const newAmt = activeRowAmount;
       const newDir = partyDir;
       if (Math.abs((prev[0].amount || 0) - newAmt) < 0.01 && prev[0].direction === newDir) return prev;
       return [{ ...prev[0], amount: newAmt, direction: newDir }];
     });
-  }, [journalParty?.amount, partyDir, journalBillByBill]);
+  }, [activeRowAmount, partyDir, activeJournalRow]);
 
   // ----- Submit -----
   const handleSubmit = async () => {
+    if (isStockJournal) {
+      const validSrc  = stockSource.filter(l => l.item_id && l.qty > 0);
+      const validDest = stockDest.filter(l => l.item_id && l.qty > 0);
+      if (validSrc.length === 0 && validDest.length === 0) {
+        showError('Validation', 'Add at least one item in Source or Destination');
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const vtId = childTypes.find(t => t.name === voucherType)?.id || selectedParentId;
+        const payload: any = {
+          vch_type_id: vtId,
+          vch_no: voucherNo || undefined,
+          vch_date: voucherDate || undefined,
+          remark: remark.trim() || undefined,
+          stock_source: validSrc.map(l => ({ item_id: Number(l.item_id), qty: l.qty, rate: l.rate, amount: l.amount, gst_rate: l.gst_rate, batch_rows: l.batch_rows })),
+          stock_destination: validDest.map(l => ({ item_id: Number(l.item_id), qty: l.qty, rate: l.rate, amount: l.amount, gst_rate: l.gst_rate, batch_rows: l.batch_rows })),
+        };
+        const res = editId ? await vouchersApi.update(editId, payload) : await vouchersApi.create(payload);
+        if (res.success) {
+          const sjData = (res as any)?.data;
+          if (sjData?.vch_no_bumped && sjData?.vch_no) {
+            showError('Voucher No. Changed', `Number already taken by another user. Saved as ${sjData.vch_no}`);
+          } else {
+            showSuccess('Saved', res.message || (editId ? 'Stock Journal updated' : 'Stock Journal created'));
+          }
+          setStockSource([emptyStockLine()]);
+          setStockDest([emptyStockLine()]);
+          if (!editId && vtId) {
+            const newNo = await vouchersApi.getNextNo(vtId, voucherDate).catch(() => null);
+            if (newNo?.success) setVoucherNo(newNo.data ?? '');
+          }
+        } else showError('Error', res.message || 'Failed to save');
+      } catch (e: any) { showError('Error', e?.message || 'Failed'); }
+      finally { setSubmitting(false); }
+      return;
+    }
+
     if (isJournalType) {
       // Reject any row that has either typed text without a selection OR an
       // amount entered without a ledger picked. Both indicate an incomplete
@@ -1510,30 +1903,28 @@ const Vouchers: React.FC = () => {
         return;
       }
       if (!journalBalanced) { showError('Validation', 'Dr total must equal Cr total'); return; }
-      if (journalBillByBill && !billAllocBalanced) { showError('Validation', 'Complete bill allocation — total must equal Grand Total'); return; }
+      if (journalBillByBill && !allRowsBillAllocBalanced) { showError('Validation', 'Complete bill allocation for every bill-by-bill ledger — each must total its own Dr/Cr amount'); return; }
 
       // Party-row picker is voucher-type aware:
       //   Receipt  → party (customer)  is on Cr (we receive money from them)
       //   Payment  → party (supplier)  is on Dr (we pay them)
-      //   Journal/Contra → either side; fall back to journalParty or first Dr row
-      // For Receipt/Payment we IGNORE journalParty when it sits on the wrong
+      //   Journal/Contra → either side; fall back to first bill-by-bill row or first Dr row
+      // For Receipt/Payment we IGNORE a bill-by-bill row when it sits on the wrong
       // side — that situation arises when the bank ledger also has
       // billbybill='Yes' and the auto-detector fires while the user is filling
       // the bank row. The party MUST be the customer/supplier ledger, so we
-      // pick the first row on the correct side regardless of journalParty.
+      // pick the first row on the correct side regardless of billByBill.
       const parentNameLc = (allVchTypes.find(t => t.id === selectedParentId)?.name || '').toLowerCase();
       const isReceipt = parentNameLc.includes('receipt');
       const isPayment = parentNameLc.includes('payment');
       const defaultPartySide: 'Dr' | 'Cr' = isReceipt ? 'Cr' : 'Dr';
-      const journalPartyRow = journalParty
-        ? validRows.find(r => r.ledger_id === journalParty.ledger_id)
-        : null;
-      const journalPartyOnRightSide = journalPartyRow?.drOrCr === defaultPartySide;
-      const useJournalParty = journalParty && (
-        (!isReceipt && !isPayment) || journalPartyOnRightSide
+      const billByBillRow = validRows.find(r => r.billByBill) || null;
+      const billByBillRowOnRightSide = billByBillRow?.drOrCr === defaultPartySide;
+      const useBillByBillRow = billByBillRow && (
+        (!isReceipt && !isPayment) || billByBillRowOnRightSide
       );
-      const partyRow = useJournalParty
-        ? (journalPartyRow || validRows[0])
+      const partyRow = useBillByBillRow
+        ? (billByBillRow || validRows[0])
         : (validRows.find(r => r.drOrCr === defaultPartySide) || validRows[0]);
       setSubmitting(true);
       try {
@@ -1550,7 +1941,11 @@ const Vouchers: React.FC = () => {
             ledger_id: r.ledger_id!,
             amount: r.drOrCr === 'Dr' ? r.dr_amount : -r.cr_amount,
           })),
-          bill_allocation: journalBillByBill ? billAllocEntries.map(e => ({ type: e.type, refno: e.refno, amount: e.amount, direction: e.direction })) : undefined,
+          bill_allocation: journalBillByBill
+            ? validRows.flatMap(r => r.billAlloc.map(e => ({
+                type: e.type, refno: e.refno, amount: e.amount, direction: e.direction, ledger_id: r.ledger_id!,
+              })))
+            : undefined,
         };
         const res = editId
           ? await vouchersApi.update(editId, payload)
@@ -1576,7 +1971,7 @@ const Vouchers: React.FC = () => {
           setVoucherNo(''); setVoucherDate(new Date().toISOString().slice(0, 10));
           setRemark(''); setBillAllocEntries([]); setCustomerBillByBill(false);
           setJournalRows([emptyJournalRow(), emptyJournalRow()]);
-          setJournalParty(null);
+          setActiveJournalRowId(null);
         }
       } catch (e: any) { showError('Error', e.message || 'Failed to save voucher'); }
       finally { setSubmitting(false); }
@@ -1630,7 +2025,7 @@ const Vouchers: React.FC = () => {
       return;
     }
 
-    if (!billAllocBalanced) { showError('Validation', 'Complete bill allocation — balance must reach zero'); return; }
+    if (!isJournalType && !billAllocBalanced) { showError('Validation', 'Complete bill allocation — balance must reach zero'); return; }
 
     // Filter ledger rows: only non-zero amounts with a ledger selected.
     const validLedgers = ledgerRows
@@ -1690,7 +2085,12 @@ const Vouchers: React.FC = () => {
           }
         }
         const wasEdit = !!editId;
-        showSuccess('Saved', res.message || (wasEdit ? 'Voucher updated' : 'Voucher created'));
+        const savedData = (res as any)?.data;
+        if (savedData?.vch_no_bumped && savedData?.vch_no) {
+          showError('Voucher No. Changed', `Number already taken by another user. Saved as ${savedData.vch_no}`);
+        } else {
+          showSuccess('Saved', res.message || (wasEdit ? 'Voucher updated' : 'Voucher created'));
+        }
         if (linkedLeadId) {
           showSuccess('Lead Closed', 'Lead has been closed via billing.');
           navigate('/lead/pending');
@@ -1711,6 +2111,11 @@ const Vouchers: React.FC = () => {
         setLedgerRows([]); setRemark('');
         setCustomers([]); setBillAllocEntries([]); setCustomerBillByBill(false);
         setActivitiesToLink([]);
+        // Re-fetch next auto number for the next voucher
+        const vtId = childTypes.find(t => t.name === voucherType)?.id || selectedParentId;
+        if (vtId) {
+          vouchersApi.getNextNo(vtId, voucherDate).then((r: any) => { if (r?.success) setVoucherNo(r.data ?? ''); }).catch(() => {});
+        }
       }
     } catch (e: any) { showError('Error', e.message || 'Failed to save voucher'); }
     finally { setSubmitting(false); }
@@ -1719,7 +2124,7 @@ const Vouchers: React.FC = () => {
   // calls the latest version of handleSubmit.
   handleSubmitRef.current = handleSubmit;
 
-  const fmt = (n: number) => n.toFixed(2);
+  // fmt is defined at module level
 
   // Sundry Debtors (party customers) shouldn't appear in the items-mode
   // Add Ledger dropdown — they belong in the Customer Name field at the
@@ -1913,16 +2318,10 @@ const Vouchers: React.FC = () => {
                       <div className="absolute z-30 left-3 right-3 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-48 overflow-y-auto">
                         {row.results.map((l: any) => (
                           <div key={l.id} onPointerDown={() => {
+                            const isBillByBill = l.billbybill === 'Yes';
                             setJournalRows(p => p.map(r => r.id === row.id
-                              ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false }
+                              ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false, billByBill: isBillByBill, billAlloc: isBillByBill ? r.billAlloc : [] }
                               : r));
-                            if (l.billbybill === 'Yes') {
-                              const amt = row.drOrCr === 'Dr' ? row.dr_amount : row.cr_amount;
-                              setJournalParty({ ledger_id: l.id, amount: amt, drOrCr: row.drOrCr });
-                              setBillAllocEntries([]);
-                            } else {
-                              setJournalParty(p => p?.ledger_id === row.ledger_id ? null : p);
-                            }
                           }}
                             className="px-3 py-2.5 text-sm hover:bg-blue-50 cursor-pointer border-b border-gray-50 last:border-0">
                             {l.company}
@@ -1949,30 +2348,39 @@ const Vouchers: React.FC = () => {
                         setJournalRows(p => p.map(r => r.id === row.id
                           ? { ...r, dr_amount: r.drOrCr === 'Dr' ? amt : 0, cr_amount: r.drOrCr === 'Cr' ? amt : 0 }
                           : r));
-                        if (journalParty?.ledger_id === row.ledger_id)
-                          setJournalParty(p => p ? { ...p, amount: amt } : null);
                       }}
                       onBlur={e => {
-                        if (journalParty?.ledger_id === row.ledger_id) {
-                          if ((parseFloat(e.target.value) || 0) > 0 && (billAllocEntries.length === 0 || !billAllocBalanced))
-                            setTimeout(() => openBillAlloc(), 50);
+                        if (isJournalType) {
+                          const rowAmt = parseFloat(e.target.value) || 0;
+                          const rowSigned = row.drOrCr === 'Dr' ? rowAmt : -rowAmt;
+                          const allocSigned = row.billAlloc.reduce((s, en) => s + (en.direction === 'Cr' ? -(Number(en.amount) || 0) : (Number(en.amount) || 0)), 0);
+                          if (rowAmt > 0 && (row.billAlloc.length === 0 || Math.abs(rowSigned - allocSigned) >= 0.01)) {
+                            if (row.billByBill) setTimeout(() => openBillAlloc(row.id), 50);
+                            else autoFillOnAccount(row.id, rowAmt, row.drOrCr);
+                          }
                         }
                       }}
                       placeholder="Amount"
                       className="flex-1 text-sm py-2.5 px-3 text-right focus:outline-none bg-transparent font-semibold text-gray-800 placeholder-gray-300" />
                   </div>
-                  {/* Bill allocation status bar — only for the bill-by-bill party row */}
-                  {journalParty?.ledger_id === row.ledger_id && (journalParty?.amount ?? 0) > 0 && (
-                    <button type="button" onClick={() => openBillAlloc()}
-                      className={`w-full flex items-center justify-between px-3 py-1.5 border-t text-xs font-semibold transition-colors ${
-                        billAllocBalanced
-                          ? 'border-green-100 bg-green-50 text-green-600'
-                          : 'border-orange-200 bg-orange-50 text-orange-600 animate-pulse'
-                      }`}>
-                      <span>{billAllocBalanced ? '✓ Bill allocation done' : '⚠ Bill allocation required'}</span>
-                      <span className="underline">{billAllocBalanced ? 'Edit' : 'Tap to Allocate'}</span>
-                    </button>
-                  )}
+                  {/* Bill allocation status bar — only for bill-by-bill rows */}
+                  {row.billByBill && (row.drOrCr === 'Dr' ? row.dr_amount : row.cr_amount) > 0 && (() => {
+                    const rowAmt = row.drOrCr === 'Dr' ? row.dr_amount : row.cr_amount;
+                    const rowSigned = row.drOrCr === 'Dr' ? rowAmt : -rowAmt;
+                    const allocSigned = row.billAlloc.reduce((s, en) => s + (en.direction === 'Cr' ? -(Number(en.amount) || 0) : (Number(en.amount) || 0)), 0);
+                    const rowBalanced = Math.abs(rowSigned - allocSigned) < 0.01;
+                    return (
+                      <button type="button" onClick={() => openBillAlloc(row.id)}
+                        className={`w-full flex items-center justify-between px-3 py-1.5 border-t text-xs font-semibold transition-colors ${
+                          rowBalanced
+                            ? 'border-green-100 bg-green-50 text-green-600'
+                            : 'border-orange-200 bg-orange-50 text-orange-600 animate-pulse'
+                        }`}>
+                        <span>{rowBalanced ? '✓ Bill allocation done' : '⚠ Bill allocation required'}</span>
+                        <span className="underline">{rowBalanced ? 'Edit' : 'Tap to Allocate'}</span>
+                      </button>
+                    );
+                  })()}
                 </div>
               ))}
               <button type="button" onClick={() => setJournalRows(p => [...p, emptyJournalRow()])}
@@ -2154,13 +2562,13 @@ const Vouchers: React.FC = () => {
             </div>
           )}
           <button type="button" onClick={() => {
-            if (journalBillByBill && !billAllocBalanced) { openBillAlloc(); return; }
+            if (journalBillByBill && !allRowsBillAllocBalanced) { openBillAllocAny(); return; }
             setMobileStep(4);
           }}
             className={`w-full text-white text-sm font-semibold py-3.5 rounded-xl mt-4 ${
-              journalBillByBill && !billAllocBalanced ? 'bg-orange-500' : 'bg-blue-600'
+              journalBillByBill && !allRowsBillAllocBalanced ? 'bg-orange-500' : 'bg-blue-600'
             }`}>
-            {journalBillByBill && !billAllocBalanced ? '⚠ Complete Bill Allocation First' : 'Next: Preview →'}
+            {journalBillByBill && !allRowsBillAllocBalanced ? '⚠ Complete Bill Allocation First' : 'Next: Preview →'}
           </button>
         </div>
       )}
@@ -2207,10 +2615,18 @@ const Vouchers: React.FC = () => {
                 <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-2">Entries</p>
                 <div className="space-y-1">
                   {journalRows.filter(r => r.ledger_id).map((r, i) => (
-                    <div key={i} className="flex justify-between text-sm">
+                    <div key={i} className="flex justify-between items-center text-sm">
                       <span className="text-gray-700">{r.ledger_name}</span>
-                      <span className={`font-medium ${r.drOrCr === 'Dr' ? 'text-blue-600' : 'text-orange-600'}`}>
-                        {r.drOrCr} ₹{fmt(r.drOrCr === 'Dr' ? r.dr_amount : r.cr_amount)}
+                      <span className="flex items-center gap-2">
+                        {r.billByBill && (
+                          <button type="button" onClick={() => openBillAlloc(r.id)}
+                            className={`text-[11px] font-semibold underline decoration-dotted ${isRowBillAllocBalanced(r) ? 'text-green-600' : 'text-orange-500'}`}>
+                            {isRowBillAllocBalanced(r) ? '✓ Bills' : 'Allocate'}
+                          </button>
+                        )}
+                        <span className={`font-medium ${r.drOrCr === 'Dr' ? 'text-blue-600' : 'text-orange-600'}`}>
+                          {r.drOrCr} ₹{fmt(r.drOrCr === 'Dr' ? r.dr_amount : r.cr_amount)}
+                        </span>
                       </span>
                     </div>
                   ))}
@@ -2223,11 +2639,11 @@ const Vouchers: React.FC = () => {
                 ₹{fmt(isJournalType ? journalDrTotal : grandTotal)}
               </span>
             </div>
-            {/* Bill Allocation row — shown when party is bill-by-bill */}
-            {(customerBillByBill || journalBillByBill) && (
+            {/* Bill Allocation row — non-journal (single party) only; journal rows show inline above */}
+            {customerBillByBill && (
               <div className="px-4 py-3 flex justify-between items-center">
                 <span className="text-sm text-gray-600">Bill Allocation</span>
-                <button type="button" onClick={openBillAlloc}
+                <button type="button" onClick={openCustomerBillAlloc}
                   className={`text-sm font-semibold underline decoration-dotted ${billAllocBalanced ? 'text-green-600' : 'text-orange-500'}`}>
                   {billAllocBalanced
                     ? `✓ ₹${fmt(billAllocTotal)}`
@@ -2243,10 +2659,16 @@ const Vouchers: React.FC = () => {
             )}
           </div>
           {/* Bill Allocation warning if not balanced */}
-          {(customerBillByBill || journalBillByBill) && !billAllocBalanced && (
-            <button type="button" onClick={openBillAlloc}
+          {customerBillByBill && !billAllocBalanced && (
+            <button type="button" onClick={openCustomerBillAlloc}
               className="w-full bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium py-3 rounded-xl flex items-center justify-center gap-2">
               ⚠ Complete Bill Allocation — Balance ₹{fmt(Math.abs(billAllocBalance))} remaining
+            </button>
+          )}
+          {journalBillByBill && !allRowsBillAllocBalanced && (
+            <button type="button" onClick={openBillAllocAny}
+              className="w-full bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium py-3 rounded-xl flex items-center justify-center gap-2">
+              ⚠ Complete Bill Allocation for all ledgers
             </button>
           )}
           {isSalesType && partyId && lines.some(l => l.product_id) && editId && (
@@ -2528,6 +2950,34 @@ const Vouchers: React.FC = () => {
         </div>
 
         {/* ══ Journal / Contra / Payment / Receipt Form ══ */}
+        {isStockJournal && (() => {
+          return (
+            <>
+              <div className="border border-gray-200 rounded mb-3 flex divide-x divide-gray-200">
+                <StockSide title="Source (Consumption)" lines={stockSource} setLines={setStockSource}
+                  onOpenBatch={lineId => setStockBatchPopup({ side: 'src', lineId })} />
+                <StockSide title="Destination (Production)" lines={stockDest} setLines={setStockDest}
+                  onOpenBatch={lineId => setStockBatchPopup({ side: 'dst', lineId })} />
+              </div>
+              {stockBatchPopup && stockBatchLine && (
+                <StockBatchPopup
+                  line={stockBatchLine}
+                  onSave={rows => {
+                    const totQty = rows.reduce((s, b) => s + b.qty, 0);
+                    const totAmt = rows.reduce((s, b) => s + b.amount, 0);
+                    const setter = stockBatchPopup.side === 'src' ? setStockSource : setStockDest;
+                    setter(p => p.map(l => l.id === stockBatchPopup.lineId
+                      ? { ...l, batch_rows: rows, qty: totQty, amount: totAmt }
+                      : l));
+                    setStockBatchPopup(null);
+                  }}
+                  onClose={() => setStockBatchPopup(null)}
+                />
+              )}
+            </>
+          );
+        })()}
+
         {isJournalType && (
           <div className="border border-gray-200 rounded mb-3">
             <table className="w-full text-sm">
@@ -2595,7 +3045,7 @@ const Vouchers: React.FC = () => {
                           // in, red when the user has typed text but not
                           // selected from the dropdown (so they immediately
                           // see the row won't save). Empty rows stay neutral.
-                          className={`w-full border rounded text-sm py-1 px-2 focus:outline-none focus:ring-1 ${
+                          className={`w-full border rounded text-sm py-1 px-2 pr-6 focus:outline-none focus:ring-1 ${
                             row.ledger_id
                               ? 'border-green-400 bg-green-50 focus:ring-green-300'
                               : row.search.trim()
@@ -2604,22 +3054,26 @@ const Vouchers: React.FC = () => {
                           }`}
                           title={row.search.trim() && !row.ledger_id ? 'Pick a ledger from the dropdown — free text is not allowed' : undefined}
                         />
+                        {row.ledger_id && (row.dr_amount > 0 || row.cr_amount > 0) && (() => {
+                          const balanced = isRowBillAllocBalanced(row);
+                          return row.billByBill ? (
+                            <button onClick={() => openBillAlloc(row.id)}
+                              title={balanced ? 'Bill allocated' : 'Allocate bills'}
+                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 text-xs font-bold ${balanced ? 'text-green-600' : 'text-orange-500 animate-pulse'}`}>
+                              {balanced ? '✓' : '⚠'}
+                            </button>
+                          ) : (
+                            <span title="On account" className="absolute right-1.5 top-1/2 -translate-y-1/2 text-xs font-bold text-green-600">✓</span>
+                          );
+                        })()}
                         {row.open && row.results.length > 0 && (
                           <div className="absolute z-20 left-0 right-0 bg-white border border-gray-200 rounded shadow-lg mt-0.5 max-h-44 overflow-y-auto">
                             {row.results.map((l: any, lIdx: number) => (
                               <div key={l.id} onPointerDown={() => {
+                                const isBillByBill = l.billbybill === 'Yes';
                                 setJournalRows(p => p.map(r => r.id === row.id
-                                  ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false }
+                                  ? { ...r, ledger_id: l.id, ledger_name: l.company, search: l.company, open: false, billByBill: isBillByBill, billAlloc: isBillByBill ? r.billAlloc : [] }
                                   : r));
-                                // If this ledger has billbybill=Yes, mark it as journal party
-                                if (l.billbybill === 'Yes') {
-                                  const amt = row.drOrCr === 'Dr' ? row.dr_amount : row.cr_amount;
-                                  setJournalParty({ ledger_id: l.id, amount: amt, drOrCr: row.drOrCr });
-                                  setBillAllocEntries([]);
-                                } else {
-                                  // Clear party if previously this row was the party
-                                  setJournalParty(p => p?.ledger_id === row.ledger_id ? null : p);
-                                }
                               }} className={`px-2 py-1.5 text-sm cursor-pointer ${lIdx === activeDropIdx ? 'bg-blue-600 text-white' : 'hover:bg-blue-50'}`}>
                                 {l.company}
                                 {l.billbybill === 'Yes' && <span className={`ml-1 text-[10px] ${lIdx === activeDropIdx ? 'text-blue-200' : 'text-blue-400'}`}>bill-by-bill</span>}
@@ -2636,15 +3090,15 @@ const Vouchers: React.FC = () => {
                           onChange={e => {
                             const v = Number(e.target.value) || 0;
                             setJournalRows(p => p.map(r => r.id === row.id ? { ...r, dr_amount: v } : r));
-                            if (journalParty?.ledger_id === row.ledger_id)
-                              setJournalParty(p => p ? { ...p, amount: v } : null);
                           }}
                           onBlur={e => {
-                            // Auto-open bill allocation when this is the party row and amount is set.
-                            // Only when no allocations exist yet — never wipe loaded edit-state.
-                            if (journalParty?.ledger_id === row.ledger_id && (parseFloat(e.target.value) || 0) > 0
-                                && billAllocEntries.length === 0) {
-                              setTimeout(() => openBillAlloc(), 50);
+                            if (isJournalType) {
+                              const amt = parseFloat(e.target.value) || 0;
+                              const allocSigned = row.billAlloc.reduce((s, en) => s + (en.direction === 'Cr' ? -(Number(en.amount) || 0) : (Number(en.amount) || 0)), 0);
+                              if (amt > 0 && (row.billAlloc.length === 0 || Math.abs(amt - allocSigned) >= 0.01)) {
+                                if (row.billByBill) setTimeout(() => openBillAlloc(row.id), 50);
+                                else autoFillOnAccount(row.id, amt, 'Dr');
+                              }
                             }
                           }}
                           className="w-full border border-gray-200 rounded text-sm py-1 px-1 text-right focus:outline-none focus:ring-1 focus:ring-blue-400 font-medium text-gray-700" />
@@ -2657,15 +3111,15 @@ const Vouchers: React.FC = () => {
                           onChange={e => {
                             const v = Number(e.target.value) || 0;
                             setJournalRows(p => p.map(r => r.id === row.id ? { ...r, cr_amount: v } : r));
-                            if (journalParty?.ledger_id === row.ledger_id)
-                              setJournalParty(p => p ? { ...p, amount: v } : null);
                           }}
                           onBlur={e => {
-                            // Auto-open bill allocation when this is the party row and amount is set.
-                            // Only when no allocations exist yet — never wipe loaded edit-state.
-                            if (journalParty?.ledger_id === row.ledger_id && (parseFloat(e.target.value) || 0) > 0
-                                && billAllocEntries.length === 0) {
-                              setTimeout(() => openBillAlloc(), 50);
+                            if (isJournalType) {
+                              const amt = parseFloat(e.target.value) || 0;
+                              const allocSigned = row.billAlloc.reduce((s, en) => s + (en.direction === 'Cr' ? -(Number(en.amount) || 0) : (Number(en.amount) || 0)), 0);
+                              if (amt > 0 && (row.billAlloc.length === 0 || Math.abs(-amt - allocSigned) >= 0.01)) {
+                                if (row.billByBill) setTimeout(() => openBillAlloc(row.id), 50);
+                                else autoFillOnAccount(row.id, amt, 'Cr');
+                              }
                             }
                           }}
                           className="w-full border border-gray-200 rounded text-sm py-1 px-1 text-right focus:outline-none focus:ring-1 focus:ring-blue-400 font-medium text-gray-700" />
@@ -2698,13 +3152,6 @@ const Vouchers: React.FC = () => {
                         (Dr {fmt(journalDrTotal)} ≠ Cr {fmt(journalCrTotal)})
                       </span>
                     )}
-                    {journalBillByBill && (
-                      <button onClick={openBillAlloc}
-                        className={`ml-3 text-[11px] font-normal underline decoration-dotted ${billAllocBalanced ? 'text-green-600' : 'text-orange-500'}`}
-                        title="Click to open bill allocation">
-                        Bill Alloc {billAllocBalanced ? '✓' : `(${fmt(billAllocTotal)}/${fmt(effectiveGrandTotal)})`}
-                      </button>
-                    )}
                   </td>
                   <td className="py-2 px-2 text-right text-sm font-bold">
                     <span className="text-blue-600">{fmt(journalDrTotal)}</span>
@@ -2719,7 +3166,7 @@ const Vouchers: React.FC = () => {
 
         {/* ══ Normal Sales / Purchase Form ══ */}
         {/* Header — Row 2: Customer Name */}
-        <div ref={customerRef} className={`relative mb-4 max-w-md ${isJournalType ? 'hidden' : ''}`}>
+        <div ref={customerRef} className={`relative mb-4 max-w-md ${isJournalType || isStockJournal ? 'hidden' : ''}`}>
           <label className="block text-[11px] text-gray-500 mb-0.5 flex items-center gap-2">
             Customer Name
             {partyId && partyState && (
@@ -2783,8 +3230,8 @@ const Vouchers: React.FC = () => {
           )}
         </div>
 
-        {/* Line Items Table — hidden for journal types */}
-        <div className={`border border-gray-200 rounded mb-0 ${isJournalType ? 'hidden' : ''}`}>
+        {/* Line Items Table — hidden for journal types and stock journal */}
+        <div className={`border border-gray-200 rounded mb-0 ${isJournalType || isStockJournal ? 'hidden' : ''}`}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -3035,7 +3482,7 @@ const Vouchers: React.FC = () => {
                       <td colSpan={4} className="py-2 px-2 text-sm font-bold text-gray-800">Grand Total</td>
                       <td className="py-2 px-2 text-right">
                         {customerBillByBill ? (
-                          <button onClick={openBillAlloc}
+                          <button onClick={openCustomerBillAlloc}
                             className={`text-base font-bold underline decoration-dotted ${billAllocBalanced ? 'text-green-600' : 'text-orange-500'}`}
                             title="Click to allocate bill">
                             {fmt(grandTotal)}
@@ -3079,14 +3526,15 @@ const Vouchers: React.FC = () => {
             const orphanParty = !isJournalType && !partyId && partyDisplay.trim()
               ? partyDisplay.trim()
               : null;
-            const blockReason =
+            const blockReason = isStockJournal ? undefined :
               orphanJournal              ? `"${orphanJournal.search.trim()}" — pick a ledger from the dropdown` :
               amtWithoutLedgerJournal    ? `Row ${journalRows.indexOf(amtWithoutLedgerJournal) + 1}: pick a ledger before entering amount` :
               orphanLedgerRow            ? `"${orphanLedgerRow.search.trim()}" — pick a ledger from the dropdown` :
               amtWithoutLedgerItems      ? `Ledger row: pick a ledger before entering amount` :
               orphanParty                ? `"${orphanParty}" — pick a customer from the dropdown` :
               isJournalType && !journalBalanced ? 'Dr total must equal Cr total' :
-              !billAllocBalanced         ? 'Complete bill allocation — balance must reach zero' :
+              isJournalType && !allRowsBillAllocBalanced ? 'Complete bill allocation for all ledgers' :
+              !isJournalType && !billAllocBalanced ? 'Complete bill allocation — balance must reach zero' :
               undefined;
             return (
               <button onClick={handleSubmit}
@@ -3105,9 +3553,12 @@ const Vouchers: React.FC = () => {
 
     {/* Cloud-Activity Picker Popup — opens when a Cloud-category item is selected */}
       {cloudPopup && (() => {
+        const getAmt = (a: any) => cloudPopup.isCreditNote
+          ? (Number(a.purchase_amount) > 0 ? Number(a.purchase_amount) : Number(a.bill_amount || 0))
+          : Number(a.bill_amount || 0);
         const total = cloudPopup.activities
           .filter(a => cloudPopup.selectedIds.has(String(a.id)))
-          .reduce((s, a) => s + Number(a.bill_amount || 0), 0);
+          .reduce((s, a) => s + getAmt(a), 0);
         const allOnPage = cloudPopup.activities.length;
         const allChecked = allOnPage > 0 && cloudPopup.activities.every(a => cloudPopup.selectedIds.has(String(a.id)));
         const toggleAll = () => {
@@ -3123,8 +3574,8 @@ const Vouchers: React.FC = () => {
             <div ref={cloudPopupRef} className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[85vh] flex flex-col">
               <div className="flex justify-between items-center px-5 py-3 border-b border-gray-100">
                 <div>
-                  <h3 className="font-semibold text-gray-800">Cloud Billing Activities — {partyDisplay}</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">Pick the activities to bill on this voucher. The amount fills automatically; quantity / rate aren't needed for cloud lines.</p>
+                  <h3 className="font-semibold text-gray-800">{cloudPopup.isCreditNote ? 'Cloud Purchase Activities' : 'Cloud Billing Activities'} — {partyDisplay}</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">{cloudPopup.isCreditNote ? 'Pick the purchase activities for this Credit Note. Amount fills from purchase_amount.' : 'Pick the activities to bill on this voucher. The amount fills automatically.'}</p>
                 </div>
                 <button onClick={() => setCloudPopup(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
@@ -3132,7 +3583,7 @@ const Vouchers: React.FC = () => {
                 {cloudPopup.loading ? (
                   <div className="text-center py-10 text-gray-400 text-sm">Loading…</div>
                 ) : cloudPopup.activities.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400 text-sm">No pending billing activities for this customer.</div>
+                  <div className="text-center py-10 text-gray-400 text-sm">{cloudPopup.isCreditNote ? 'No pending purchase activities found for servers mapped to this customer.' : 'No pending billing activities for this customer.'}</div>
                 ) : (
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase">
@@ -3174,7 +3625,7 @@ const Vouchers: React.FC = () => {
                             <td className="py-2 px-2 text-gray-600 whitespace-nowrap text-[12px]">{period}</td>
                             <td className="py-2 px-2 text-right tabular-nums">{a.billing_units ?? '—'}</td>
                             <td className="py-2 px-2 text-right tabular-nums">{a.last_bill_rate != null ? fmtAmt(a.last_bill_rate) : '—'}</td>
-                            <td className="py-2 px-2 text-right tabular-nums font-medium whitespace-nowrap">{fmtAmt(a.bill_amount)}</td>
+                            <td className="py-2 px-2 text-right tabular-nums font-medium whitespace-nowrap">{fmtAmt(getAmt(a))}</td>
                           </tr>
                         );
                       })}
@@ -3530,11 +3981,11 @@ const Vouchers: React.FC = () => {
                 <p className="text-[11px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Bill Allocation</p>
                 <h3 className="font-semibold text-gray-800 text-sm leading-tight">
                   {isJournalType
-                    ? (journalRows.find(r => r.ledger_id === journalParty?.ledger_id)?.ledger_name || '—')
+                    ? (activeJournalRow?.ledger_name || '—')
                     : partyDisplay}
                 </h3>
               </div>
-              <button onClick={() => setBillAllocOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              <button onClick={() => closeBillAlloc()} className="p-1 text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
 
             {/* Desktop: original table layout */}
@@ -3778,7 +4229,7 @@ const Vouchers: React.FC = () => {
                   <span className="text-gray-500">Allocated: <strong className={billAllocBalanced ? 'text-green-600' : 'text-orange-500'}>{fmt(Math.abs(billAllocSigned))}</strong> <span className={`text-[10px] font-semibold ${billAllocBalanced ? 'text-green-500' : 'text-orange-400'}`}>{billAllocSigned >= 0 ? 'Dr.' : 'Cr.'}</span></span>
                   <span className="text-gray-500">Balance: <strong className={billAllocBalanced ? 'text-green-600' : 'text-red-500'}>{fmt(Math.abs(billAllocBalance))}</strong> <span className={`text-[10px] font-semibold ${billAllocBalanced ? 'text-green-500' : 'text-red-400'}`}>{billAllocBalance >= 0 ? 'Dr.' : 'Cr.'}</span></span>
                 </div>
-                <button onClick={() => setBillAllocOpen(false)} disabled={!billAllocBalanced}
+                <button onClick={() => closeBillAlloc()} disabled={!billAllocBalanced}
                   title={!billAllocBalanced ? 'Allocated total must equal Grand Total' : undefined}
                   className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white rounded">Done</button>
               </div>
@@ -3789,7 +4240,7 @@ const Vouchers: React.FC = () => {
                   <span className="text-gray-500">Allocated: <strong className={billAllocBalanced ? 'text-green-600' : 'text-orange-500'}>₹{fmt(Math.abs(billAllocSigned))}</strong></span>
                   <span className="text-gray-500">Balance: <strong className={billAllocBalanced ? 'text-green-600' : 'text-red-500'}>₹{fmt(Math.abs(billAllocBalance))}</strong></span>
                 </div>
-                <button onClick={() => setBillAllocOpen(false)} disabled={!billAllocBalanced}
+                <button onClick={() => closeBillAlloc()} disabled={!billAllocBalanced}
                   title={!billAllocBalanced ? 'Allocated total must equal Grand Total' : undefined}
                   className="w-full py-2.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white rounded-xl font-medium">
                   {billAllocBalanced ? 'Done' : `Balance: ₹${fmt(Math.abs(billAllocBalance))} remaining`}

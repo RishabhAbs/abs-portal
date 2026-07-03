@@ -454,7 +454,7 @@ export default function LedgerReport() {
                       <div
                         key={`m-${first.vch_id}-${gi}`}
                         className="border-b border-gray-200"
-                        onClick={() => first.vch_no && openVoucher(first.vch_id)}
+                        onClick={() => openVoucher(first.vch_id)}
                       >
                         <div className="flex items-start justify-between px-4 py-3">
                           <div className="flex-1 min-w-0 pr-3">
@@ -539,15 +539,17 @@ export default function LedgerReport() {
                           )}
                         </td>
                         <td className={`${cell} ${continuation ? 'border-t-transparent' : ''} whitespace-nowrap`}>
-                          {r.is_first && r.vch_no ? (
+                          {r.is_first ? (
                             <button
                               onClick={() => openVoucher(r.vch_id)}
-                              className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                              className={r.vch_no
+                                ? "text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                                : "text-slate-400 hover:text-blue-600 hover:underline cursor-pointer"}
                               title={canEditVouchers ? 'Open in edit mode' : 'View only — no edit permission'}
                             >
-                              {r.vch_no}
+                              {r.vch_no || '—'}
                             </button>
-                          ) : (r.is_first ? '—' : '')}
+                          ) : ''}
                         </td>
                         <td className={`${cell} ${continuation ? 'border-t-transparent' : ''} text-slate-700 whitespace-nowrap`}>
                           {r.is_first

@@ -269,6 +269,40 @@ export class ActivitiesService {
     );
   }
 
+  /** Pending (unbilled) purchase activities for a customer —
+   *  Joins via sof_no: cloud_mappings -> cloud_servers.sof_no = cloud_activities.sof_no
+   *  Falls back to Sales activities if no Purchase activities exist for the customer. */
+  async findPendingPurchaseByCustomer(customerId: string): Promise<any[]> {
+    await this.ensureVoucherNoColumn();
+    // Try Purchase activities first via sof_no join
+    const purchaseRows = await this.db.query<any>(
+      `SELECT ca.*
+       FROM cloud_activities ca
+       JOIN cloud_servers cs ON cs.sof_no = ca.sof_no AND ca.sof_no IS NOT NULL AND ca.sof_no != ''
+       JOIN cloud_mappings cm ON cm.server_id = cs.id
+         AND cm.customer_id = ?
+         AND cm.status = 'Active'
+       WHERE ca.voucher_id IS NULL
+         AND (ca.voucher_no IS NULL OR ca.voucher_no = '')
+         AND ca.record_nature = 'Purchase'
+       ORDER BY ca.activity_date DESC`,
+      [customerId]
+    );
+    if (purchaseRows.length > 0) return purchaseRows;
+
+    // Fallback: Sales activities directly on the customer (for customers billed directly)
+    return this.db.query<any>(
+      `SELECT ca.*
+       FROM cloud_activities ca
+       WHERE ca.customer_id = ?
+         AND ca.voucher_id IS NULL
+         AND (ca.voucher_no IS NULL OR ca.voucher_no = '')
+         AND ca.record_nature = 'Sales'
+       ORDER BY ca.activity_date DESC`,
+      [customerId]
+    );
+  }
+
   /** Stamp voucher linkage on selected activities after voucher save.
    *  Accepts either a numeric vch_id (preferred) or the legacy voucher_no
    *  string. When vch_id is given we resolve and persist both fields, so a

@@ -44,9 +44,15 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
     const [users, setUsers] = useState<any[]>([]);
     const [checkInBusyId, setCheckInBusyId] = useState<number | null>(null);
     const [checkOutSubmitting, setCheckOutSubmitting] = useState(false);
+    const [recordingVisitId, setRecordingVisitId] = useState<number | null>(null);
+    const [recordingUploadStatus, setRecordingUploadStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
     // Synchronous refs block rapid double-taps (setState is async).
     const checkInLockRef = useRef(false);
     const checkOutLockRef = useRef(false);
+    // MediaRecorder refs — persist across renders without re-render on change.
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const activeStreamRef = useRef<MediaStream | null>(null);
     const { showError, showSuccess } = useToast();
     const { isAdmin: isAdminFn, user, canView, canEdit, canDelete, canCreate, canCheckPermission } = useAuth();
     const isAdmin = isAdminFn();
@@ -241,6 +247,59 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
 
     const getCurrentLocation = () => getPreciseLocation();
 
+    const startRecording = async (visitId: number) => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { channelCount: 1, sampleRate: 8000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+            });
+            activeStreamRef.current = stream;
+            audioChunksRef.current = [];
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+            const recorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 8000 } : { audioBitsPerSecond: 8000 });
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+            recorder.start(1000);
+            mediaRecorderRef.current = recorder;
+            setRecordingVisitId(visitId);
+        } catch {
+            // Mic denied or not available — recording is optional, don't block check-in.
+        }
+    };
+
+    const stopAndUploadRecording = async (visitId: number) => {
+        const recorder = mediaRecorderRef.current;
+        if (!recorder || recorder.state === 'inactive') return;
+        return new Promise<void>((resolve) => {
+            recorder.onstop = async () => {
+                await new Promise(r => setTimeout(r, 500));
+                activeStreamRef.current?.getTracks().forEach(t => t.stop());
+                activeStreamRef.current = null;
+                mediaRecorderRef.current = null;
+                setRecordingVisitId(null);
+
+                const chunks = audioChunksRef.current;
+                audioChunksRef.current = [];
+                if (chunks.length === 0) { resolve(); return; }
+
+                const mimeType = chunks[0].type || 'audio/webm';
+                const ext = mimeType.includes('ogg') ? '.ogg' : mimeType.includes('mp4') ? '.mp4' : '.webm';
+                const blob = new Blob(chunks, { type: mimeType });
+
+                setRecordingUploadStatus('uploading');
+                try {
+                    await visitsApi.uploadRecording(visitId, blob, ext);
+                    setRecordingUploadStatus('done');
+                } catch {
+                    setRecordingUploadStatus('error');
+                }
+                resolve();
+            };
+            try { recorder.requestData(); } catch { /* flush buffered audio before stop */ }
+            recorder.stop();
+        });
+    };
+
     const handleCheckIn = async (task: TaskData) => {
         if (checkInLockRef.current) return; // synchronous double-click guard
         checkInLockRef.current = true;
@@ -284,6 +343,8 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
                 }]);
             }
             showSuccess('Checked In', 'Location and time recorded successfully');
+            // Start mic recording — runs after check-in succeeds regardless of visit type.
+            await startRecording(task.id);
             fetchData();
         } catch (e: any) {
             showError('Check-in Failed', e.message || 'Could not fetch location');
@@ -414,6 +475,7 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
                     tally_slow: checkoutModal.tally_slow
                 }]);
             }
+            await stopAndUploadRecording(task.id).catch(() => {});
             showSuccess('Checked Out', 'Task completed successfully');
             setCheckoutModal(null);
             fetchData();
@@ -641,12 +703,19 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
                                             {checkInBusyId === t.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'In'}
                                         </button>
                                     ) : canCheckinVisit(t) && t.status === 'In Progress' ? (
-                                        <button
-                                            onClick={() => handleCheckOut(t)}
-                                            className="h-7 px-3 bg-emerald-600 rounded-md flex items-center justify-center text-white text-[10px] font-bold shadow-sm active:scale-95"
-                                        >
-                                            Out
-                                        </button>
+                                        <div className="flex items-center gap-1.5">
+                                            {recordingVisitId === t.id && (
+                                                <span className="flex items-center gap-1 px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-[9px] font-black uppercase tracking-wider animate-pulse">
+                                                    <span className="w-1.5 h-1.5 bg-red-500 rounded-full inline-block"></span> Rec
+                                                </span>
+                                            )}
+                                            <button
+                                                onClick={() => handleCheckOut(t)}
+                                                className="h-7 px-3 bg-emerald-600 rounded-md flex items-center justify-center text-white text-[10px] font-bold shadow-sm active:scale-95"
+                                            >
+                                                Out
+                                            </button>
+                                        </div>
                                     ) : null}
                                 </div>
                             </div>
@@ -772,7 +841,14 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
                                                         !t.check_in_date ? (
                                                             <button onClick={() => handleCheckIn(t)} disabled={checkInBusyId === t.id} className="h-6 px-2 bg-blue-600 text-white rounded text-[9px] font-black uppercase tracking-widest hover:bg-blue-700 shadow-sm active:scale-95 transition-all inline-flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed">{checkInBusyId === t.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'IN'}</button>
                                                         ) : (!t.check_out_time && t.status === 'In Progress') ? (
-                                                            <button onClick={() => handleCheckOut(t)} className="h-6 px-2 bg-emerald-600 text-white rounded text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-sm active:scale-95 transition-all">OUT</button>
+                                                            <>
+                                                                {recordingVisitId === t.id && (
+                                                                    <span className="flex items-center gap-0.5 px-1 py-0.5 bg-red-100 text-red-600 rounded text-[8px] font-black uppercase animate-pulse">
+                                                                        <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span> Rec
+                                                                    </span>
+                                                                )}
+                                                                <button onClick={() => handleCheckOut(t)} className="h-6 px-2 bg-emerald-600 text-white rounded text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-sm active:scale-95 transition-all">OUT</button>
+                                                            </>
                                                         ) : null
                                                     )}
                                                     {canEditVisit(t) && (
@@ -881,6 +957,31 @@ const PendingVisits: React.FC<{ segment?: string }> = ({ segment: propSegment })
                                                 </>
                                             )}
                                         </div>
+                                    </div>
+                                )}
+                                {/* Visit Recording Player — shown for any visit that has a recording */}
+                                {(viewTask as any).recording_path && (
+                                    <div className="space-y-2 pt-2 bg-gray-50 p-4 rounded-2xl border border-gray-200">
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-500 flex items-center gap-1.5">
+                                            <span className="w-2 h-2 bg-red-500 rounded-full inline-block"></span>
+                                            Visit Recording
+                                        </h4>
+                                        <audio
+                                            controls
+                                            className="w-full rounded-lg"
+                                            src={visitsApi.getRecordingUrl(viewTask.id)}
+                                            style={{ height: '36px' }}
+                                        >
+                                            Your browser does not support audio playback.
+                                        </audio>
+                                        <p className="text-[9px] text-gray-400">Conversation recorded during the visit. Accessible by managers and admins only.</p>
+                                    </div>
+                                )}
+                                {/* Upload status feedback while uploading after checkout */}
+                                {recordingUploadStatus === 'uploading' && (
+                                    <div className="flex items-center gap-2 text-[11px] text-blue-600 font-medium">
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                        Uploading visit recording…
                                     </div>
                                 )}
                             </div>

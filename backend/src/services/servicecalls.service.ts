@@ -133,8 +133,19 @@ export class ServiceCallsService implements OnModuleInit {
       await this.db.execute(`ALTER TABLE lead_notes ADD INDEX idx_assigned_to (assigned_to)`);
     } catch (e) { /* index already exists */ }
     try {
-      // stage: lead pipeline phase captured per Update note
+      await this.db.execute(`ALTER TABLE lead_notes ADD COLUMN deadline DATE NULL AFTER status`);
+    } catch (e) { /* column already exists */ }
+    try {
+      await this.db.execute(`ALTER TABLE lead_notes ADD COLUMN next_update_date DATE NULL AFTER deadline`);
+    } catch (e) { /* column already exists */ }
+    try {
       await this.db.execute(`ALTER TABLE lead_notes ADD COLUMN stage VARCHAR(50) NULL AFTER next_update_date`);
+    } catch (e) { /* column already exists */ }
+    try {
+      await this.db.execute(`ALTER TABLE lead_notes ADD COLUMN dev_completed_at DATETIME NULL AFTER stage`);
+    } catch (e) { /* column already exists */ }
+    try {
+      await this.db.execute(`ALTER TABLE lead_notes ADD COLUMN dev_completed_by VARCHAR(100) NULL AFTER dev_completed_at`);
     } catch (e) { /* column already exists */ }
   }
 

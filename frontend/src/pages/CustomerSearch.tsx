@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { customersApi, tallyApi, adminsApi, resellersApi } from "../services/api";
+import { customersApi, tallyApi, adminsApi, resellersApi, serviceCallsApi } from "../services/api";
 import { useColumnPermissions } from '../hooks/useColumnPermissions';
 import { useToast } from '../components/Toast/Toast';
 import { useSwipeTabs } from '../hooks/useSwipeTabs';
@@ -185,6 +185,10 @@ const CustomerSearch: React.FC = () => {
       .catch(() => {/* leave dropdown empty if API not yet available */});
   }, [canEditReseller]);
 
+  useEffect(() => {
+    serviceCallsApi.getFlavors().then(res => setTallyFlavors(res.data || [])).catch(() => {});
+  }, []);
+
   // Searchable reseller dropdown state
   const [resellerSearch, setResellerSearch] = useState('');
   const [showResellerDropdown, setShowResellerDropdown] = useState(false);
@@ -230,6 +234,7 @@ const CustomerSearch: React.FC = () => {
     }
   }, [updateProfileModal]);
 
+  const [tallyFlavors, setTallyFlavors] = useState<{ id: number; name: string }[]>([]);
   const [tallyModal, setTallyModal] = useState<{ open: boolean, type: 'add' | 'update', data: any }>({ open: false, type: 'add', data: null });
   const [tallyForm, setTallyForm] = useState({
     serial: '',
@@ -2358,7 +2363,10 @@ const CustomerSearch: React.FC = () => {
               </div>
               <div>
                 <label className="block text-gray-600 mb-1">Flavor</label>
-                <input type="text" value={tallyForm.flavor} onChange={e => setTallyForm({...tallyForm, flavor: e.target.value})} className="w-full border rounded px-2 py-1" />
+                <select value={tallyForm.flavor} onChange={e => setTallyForm({...tallyForm, flavor: e.target.value})} className="w-full border rounded px-2 py-1">
+                  <option value="">Select Flavor...</option>
+                  {tallyFlavors.map(f => <option key={f.id} value={String(f.id)}>{f.name}</option>)}
+                </select>
               </div>
               <div>
                 <label className="block text-gray-600 mb-1">Renewal Frequency</label>
@@ -2702,7 +2710,10 @@ const CustomerSearch: React.FC = () => {
               </div>
               <div>
                 <label className="block text-gray-600 mb-1">Flavor</label>
-                <input type="text" value={tallyForm.flavor} onChange={e => setTallyForm({...tallyForm, flavor: e.target.value})} className="w-full border rounded px-2 py-1" />
+                <select value={tallyForm.flavor} onChange={e => setTallyForm({...tallyForm, flavor: e.target.value})} className="w-full border rounded px-2 py-1">
+                  <option value="">Select Flavor...</option>
+                  {tallyFlavors.map(f => <option key={f.id} value={String(f.id)}>{f.name}</option>)}
+                </select>
               </div>
               <div>
                 <label className="block text-gray-600 mb-1">Renewal Frequency</label>

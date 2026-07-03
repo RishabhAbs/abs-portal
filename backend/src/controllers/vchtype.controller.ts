@@ -28,7 +28,7 @@ export class VchTypeController {
     @Post()
     @ApiOperation({ summary: 'Create voucher type' })
     @RequirePermission('vch_types', 'create')
-    async create(@Body() body: { name: string; parent_id?: number | null; deemed_positive?: 'YES' | 'NO' | null }) {
+    async create(@Body() body: any) {
         const item = await this.vchTypeService.create(body);
         return { success: true, data: item, message: 'Voucher type created' };
     }
@@ -36,10 +36,7 @@ export class VchTypeController {
     @Put(':id')
     @ApiOperation({ summary: 'Update voucher type' })
     @RequirePermission('vch_types', 'edit')
-    async update(
-        @Param('id') id: string,
-        @Body() body: { name?: string; parent_id?: number | null; deemed_positive?: 'YES' | 'NO' | null }
-    ) {
+    async update(@Param('id') id: string, @Body() body: any) {
         await this.vchTypeService.update(parseInt(id, 10), body);
         return { success: true, message: 'Voucher type updated' };
     }

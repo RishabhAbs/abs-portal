@@ -419,6 +419,29 @@ export const visitsApi = {
   delete: (id: number) => fetchApi(`/visits/${id}`, { method: 'DELETE' }),
   update: (data: any) => fetchApi<{ success: boolean }>('/visits/update', { method: 'POST', body: JSON.stringify(data) }),
   toggleForceCheckin: (id: number, allowed: boolean) => fetchApi<{ success: boolean }>('/visits/force-checkin', { method: 'POST', body: JSON.stringify({ id, allowed }) }),
+  uploadRecording: async (id: number, blob: Blob, ext: string) => {
+    const form = new FormData();
+    form.append('recording', blob, `visit-${id}${ext}`);
+    const token = getToken();
+    const base = window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
+    const r = await fetch(`${base}/api/visits/${id}/recording`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    const text = await r.text();
+    let json: any;
+    try { json = JSON.parse(text); } catch { json = { success: false, raw: text }; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${json?.message || text}`);
+    return json as { success: boolean; path?: string };
+  },
+  getRecordingUrl: (id: number, recordingPath?: string) => {
+    if (recordingPath) {
+      const base = window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
+      return `${base}/uploads/${recordingPath}`;
+    }
+    return `/api/visits/${id}/recording`;
+  },
 };
 
 // Customer Calls API
@@ -572,6 +595,7 @@ export const activitiesApi = {
   getTotalUsers: (customerId: string) => fetchApi<{ success: boolean; data: { total_users: number } }>(`/activities/customer/${customerId}/total-users`),
   getLastExpiry: (customerId: string) => fetchApi<{ success: boolean; data: { last_expiry_date: string | null } }>(`/activities/customer/${customerId}/last-expiry`),
   getPendingByCustomer: (customerId: string) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending`),
+  getPendingPurchaseByCustomer: (customerId: string) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending-purchase`),
   markBilled: (activityIds: string[], opts: { voucherId?: number; voucherNo?: string }) => fetchApi<{ success: boolean; updated: number }>('/activities/mark-billed', {
     method: 'POST',
     body: JSON.stringify({ activity_ids: activityIds, voucher_id: opts.voucherId, voucher_no: opts.voucherNo }),
@@ -894,8 +918,8 @@ export const ledgerGroupApi = {
 
 export const vchTypeApi = {
   getAll: () => fetchApi<{ success: boolean; data: any[] }>('/vchtypes'),
-  create: (data: { name: string; parent_id?: number | null; deemed_positive?: 'YES' | 'NO' | null }) => fetchApi<{ success: boolean; data: any; message: string }>('/vchtypes', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: { name?: string; parent_id?: number | null; deemed_positive?: 'YES' | 'NO' | null }) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  create: (data: any) => fetchApi<{ success: boolean; data: any; message: string }>('/vchtypes', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: any) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'DELETE' }),
 };
 
@@ -1029,7 +1053,7 @@ export const vouchersApi = {
   },
   deleteVoucher: (id: number) => fetchApi<{ success: boolean }>(`/vouchers/${id}`, { method: 'DELETE' }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; data: any; message: string }>(`/vouchers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  getNextNo: (vchTypeId: number) => fetchApi<{ success: boolean; data: string }>(`/vouchers/next-no?vch_type_id=${vchTypeId}`),
+  getNextNo: (vchTypeId: number, forDate?: string) => fetchApi<{ success: boolean; data: string }>(`/vouchers/next-no?vch_type_id=${vchTypeId}${forDate ? `&for_date=${forDate}` : ''}`),
   markChecked:   (id: number) => fetchApi<{ success: boolean; message: string }>(`/vouchers/${id}/check`,   { method: 'POST' }),
   markUnchecked: (id: number) => fetchApi<{ success: boolean; message: string }>(`/vouchers/${id}/uncheck`, { method: 'POST' }),
 };

@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, X, ChevronDown, Search, Lock } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, ChevronDown, Search, Lock, Settings } from 'lucide-react';
 import { vchTypeApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
+
+interface PeriodRow { id?: number; applicable_from: string; particulars?: string; start_no?: number; period_type?: string; }
 
 interface VchTypeItem {
   id: number;
@@ -11,17 +13,36 @@ interface VchTypeItem {
   parent_name: string | null;
   deemed_positive: 'YES' | 'NO' | null;
   is_system: number;
+  numbering_mode: 'manual' | 'automatic';
+  vch_width: number;
+  numbering_periods: { applicable_from: string; start_no: number; period_type: string }[];
+  prefix_periods: { applicable_from: string; particulars: string }[];
+  suffix_periods: { applicable_from: string; particulars: string }[];
 }
 
 const PAGE_SIZE = 20;
 
+const fmtDate = (d: string) => {
+  if (!d) return '';
+  const [y, m, day] = d.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${parseInt(day)}-${months[parseInt(m)-1]}-${y.slice(2)}`;
+};
 
-const DeemedBadge: React.FC<{ value: 'YES' | 'NO' | null }> = ({ value }) => {
-  if (!value) return <span className="text-xs text-gray-300 italic">—</span>;
+// Inline editable cell for period tables
+const PeriodCell: React.FC<{
+  value: string; onChange: (v: string) => void; type?: string; placeholder?: string;
+  options?: { value: string; label: string }[];
+}> = ({ value, onChange, type = 'text', placeholder = '', options }) => {
+  if (options) return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      className="w-full text-xs border-0 bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-300 rounded px-1">
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
   return (
-    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${value === 'YES' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
-      {value}
-    </span>
+    <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+      className="w-full text-xs border-0 bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-300 rounded px-1" />
   );
 };
 
@@ -31,6 +52,7 @@ const VchType: React.FC = () => {
   const canAdd = canCreate('vch_types');
   const canMod = canEdit('vch_types');
   const canDel = canDelete('vch_types');
+
   const [types, setTypes]     = useState<VchTypeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState('');
@@ -38,17 +60,21 @@ const VchType: React.FC = () => {
 
   const [showPopup, setShowPopup] = useState(false);
   const [editing, setEditing]     = useState<VchTypeItem | null>(null);
-  const [form, setForm] = useState({
-    name: '',
-    parent_id: null as number | null,
-    parent_search: '',
-    deemed_positive: '' as 'YES' | 'NO' | '',
-    deemed_auto: false,   // true = value came from parent, false = manually set
+
+  const defaultForm = () => ({
+    name: '', parent_id: null as number | null, parent_search: '',
+    deemed_positive: '' as 'YES' | 'NO' | '', deemed_auto: false,
+    numbering_mode: 'manual' as 'manual' | 'automatic',
+    vch_width: 3,
+    numbering_periods: [] as { applicable_from: string; start_no: number; period_type: string }[],
+    prefix_periods:    [] as { applicable_from: string; particulars: string }[],
+    suffix_periods:    [] as { applicable_from: string; particulars: string }[],
   });
+
+  const [form, setForm] = useState(defaultForm());
   const [saving, setSaving]         = useState(false);
   const [parentOpen, setParentOpen] = useState(false);
   const parentRef = useRef<HTMLDivElement>(null);
-
   const [deleteTarget, setDeleteTarget] = useState<VchTypeItem | null>(null);
   const [deleting, setDeleting]         = useState(false);
 
@@ -59,7 +85,6 @@ const VchType: React.FC = () => {
     } catch {}
     setLoading(false);
   };
-
   useEffect(() => { fetchTypes(); }, []);
 
   useEffect(() => {
@@ -70,40 +95,42 @@ const VchType: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const filtered = types.filter(t =>
-    t.name.toLowerCase().includes(search.toLowerCase()) ||
-    (t.parent_name || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered   = types.filter(t => t.name.toLowerCase().includes(search.toLowerCase()) || (t.parent_name || '').toLowerCase().includes(search.toLowerCase()));
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const openCreate = () => {
-    setEditing(null);
-    setForm({ name: '', parent_id: null, parent_search: '', deemed_positive: '', deemed_auto: false });
-    setShowPopup(true);
-  };
+  const openCreate = () => { setEditing(null); setForm(defaultForm()); setShowPopup(true); };
 
   const openEdit = (t: VchTypeItem) => {
     setEditing(t);
     setForm({
-      name: t.name,
-      parent_id: t.parent_id,
-      parent_search: t.parent_name || '',
-      deemed_positive: t.deemed_positive ?? '',
-      deemed_auto: false,
+      name: t.name, parent_id: t.parent_id, parent_search: t.parent_name || '',
+      deemed_positive: t.deemed_positive ?? '', deemed_auto: false,
+      numbering_mode: t.numbering_mode || 'manual',
+      vch_width: t.vch_width || 3,
+      numbering_periods: (t.numbering_periods || []).map(p => ({ ...p })),
+      prefix_periods:    (t.prefix_periods || []).map(p => ({ ...p })),
+      suffix_periods:    (t.suffix_periods || []).map(p => ({ ...p })),
     });
     setShowPopup(true);
   };
 
   const handleSave = async () => {
-    if (!form.name.trim()) { showError('Validation', 'Name is required'); return; }
+    if (!editing?.is_system && !form.name.trim()) { showError('Validation', 'Name is required'); return; }
     setSaving(true);
     try {
-      const payload = {
-        name: form.name.trim(),
-        parent_id: form.parent_id ?? null,
-        deemed_positive: (form.deemed_positive as 'YES' | 'NO') || null,
+      const payload: any = {
+        numbering_mode:     form.numbering_mode,
+        vch_width:          form.vch_width,
+        numbering_periods:  form.numbering_mode === 'automatic' ? form.numbering_periods : [],
+        prefix_periods:     form.numbering_mode === 'automatic' ? form.prefix_periods : [],
+        suffix_periods:     form.numbering_mode === 'automatic' ? form.suffix_periods : [],
       };
+      if (!editing?.is_system) {
+        payload.name            = form.name.trim();
+        payload.parent_id       = form.parent_id ?? null;
+        payload.deemed_positive = (form.deemed_positive as 'YES' | 'NO') || null;
+      }
       if (editing) {
         const res = await vchTypeApi.update(editing.id, payload);
         if (res.success) { showSuccess('Updated', 'Voucher type updated'); setShowPopup(false); fetchTypes(); }
@@ -129,35 +156,46 @@ const VchType: React.FC = () => {
     (!editing || t.id !== editing.id) &&
     t.name.toLowerCase().includes(form.parent_search.toLowerCase())
   );
-
   const selectParent = (t: VchTypeItem) => {
-    // Auto-apply deemed_positive from selected parent
-    const autoDeemed = t.deemed_positive ?? '';
-    setForm(f => ({
-      ...f,
-      parent_id: t.id,
-      parent_search: t.name,
-      deemed_positive: autoDeemed,
-      deemed_auto: true,
-    }));
+    setForm(f => ({ ...f, parent_id: t.id, parent_search: t.name, deemed_positive: t.deemed_positive ?? '', deemed_auto: true }));
     setParentOpen(false);
   };
+  const clearParent = () => setForm(f => ({ ...f, parent_id: null, parent_search: '', deemed_positive: '', deemed_auto: false }));
 
-  const clearParent = () => setForm(f => ({
-    ...f,
-    parent_id: null,
-    parent_search: '',
-    deemed_positive: '',
-    deemed_auto: false,
-  }));
+  // Period table helpers
+  const addPeriodRow = (field: 'numbering_periods' | 'prefix_periods' | 'suffix_periods') => {
+    setForm(f => {
+      const arr = [...(f[field] as any[])];
+      const today = new Date().toISOString().split('T')[0];
+      if (field === 'numbering_periods') arr.push({ applicable_from: today, start_no: 1, period_type: 'yearly' });
+      else arr.push({ applicable_from: today, particulars: '' });
+      return { ...f, [field]: arr };
+    });
+  };
+  const updatePeriodRow = (field: 'numbering_periods' | 'prefix_periods' | 'suffix_periods', idx: number, key: string, val: any) => {
+    setForm(f => {
+      const arr = [...(f[field] as any[])];
+      arr[idx] = { ...arr[idx], [key]: val };
+      return { ...f, [field]: arr };
+    });
+  };
+  const removePeriodRow = (field: 'numbering_periods' | 'prefix_periods' | 'suffix_periods', idx: number) => {
+    setForm(f => { const arr = [...(f[field] as any[])]; arr.splice(idx, 1); return { ...f, [field]: arr }; });
+  };
 
   const pageNums = Array.from({ length: totalPages }, (_, i) => i + 1)
     .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
     .reduce<(number | string)[]>((acc, p, i, arr) => {
       if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push('...');
-      acc.push(p);
-      return acc;
+      acc.push(p); return acc;
     }, []);
+
+  // Derive preview from first applicable period row
+  const previewPrefix = form.prefix_periods[0]?.particulars || '';
+  const previewSuffix = form.suffix_periods[0]?.particulars || '';
+  const previewStart  = form.numbering_periods[0]?.start_no ?? 1;
+  const numPreview    = form.numbering_mode === 'automatic'
+    ? `${previewPrefix}${String(previewStart).padStart(form.vch_width, '0')}${previewSuffix}` : null;
 
   return (
     <div className="min-h-screen bg-gray-100 p-3">
@@ -192,6 +230,7 @@ const VchType: React.FC = () => {
                     <th className="py-2.5 px-3 text-left w-[50px]">S.No</th>
                     <th className="py-2.5 px-3 text-left">Name</th>
                     <th className="py-2.5 px-3 text-left">Parent</th>
+                    <th className="py-2.5 px-3 text-left">Numbering</th>
                     <th className="py-2.5 px-3 text-center w-[100px]">Actions</th>
                   </tr>
                 </thead>
@@ -204,9 +243,24 @@ const VchType: React.FC = () => {
                         {!!t.is_system && <Lock size={11} className="text-gray-300 flex-shrink-0" />}
                       </td>
                       <td className="py-2.5 px-3 text-gray-500">{t.parent_name || t.name}</td>
+                      <td className="py-2.5 px-3">
+                        {t.numbering_mode === 'automatic' ? (
+                          <span className="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                            Auto · {(t.prefix_periods?.[0]?.particulars || '')}
+                            <span className="font-mono">{'0'.repeat(t.vch_width || 3)}</span>
+                            {(t.suffix_periods?.[0]?.particulars || '')}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-gray-400 italic">Manual</span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 text-center">
                         {t.is_system ? (
-                          <span className="text-[11px] text-gray-300 italic">system</span>
+                          <div className="flex justify-center items-center gap-1.5">
+                            {canMod && <button onClick={() => openEdit(t)} title="Configure Numbering"
+                              className="text-blue-400 hover:text-blue-600 p-1"><Settings size={14} /></button>}
+                            <span className="text-[11px] text-gray-300 italic">system</span>
+                          </div>
                         ) : (
                           <div className="flex justify-center gap-2">
                             {canMod && <button onClick={() => openEdit(t)} title="Edit"
@@ -222,7 +276,6 @@ const VchType: React.FC = () => {
                 </tbody>
               </table>
             </div>
-
             {totalPages > 1 && (
               <div className="flex items-center justify-between mt-3 text-sm text-gray-500">
                 <span>{filtered.length} types · Page {page} of {totalPages}</span>
@@ -245,49 +298,176 @@ const VchType: React.FC = () => {
 
       {/* Create / Edit Modal */}
       {showPopup && (
-        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-lg shadow-xl p-5 w-[420px]">
-            <div className="flex justify-between items-center mb-4">
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-[780px] max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100">
               <h3 className="font-semibold text-gray-800">{editing ? 'Edit Voucher Type' : 'Create Voucher Type'}</h3>
               <button onClick={() => setShowPopup(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-0.5">Name *</label>
-                <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g. Sales Return" autoFocus
-                  className="w-full border border-gray-300 rounded text-sm py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-blue-400" />
-              </div>
 
-              <div>
-                <label className="block text-xs text-gray-500 mb-0.5">Parent</label>
-                <div className="relative" ref={parentRef}>
-                  <div className="flex items-center border border-gray-300 rounded overflow-hidden">
-                    <input type="text" value={form.parent_search}
-                      onChange={e => { setForm(f => ({ ...f, parent_search: e.target.value, parent_id: null, deemed_auto: false })); setParentOpen(true); }}
-                      onFocus={() => setParentOpen(true)}
-                      placeholder="Search & select parent…"
-                      className="flex-1 text-sm py-1.5 px-2 focus:outline-none" />
-                    {form.parent_id
-                      ? <button onClick={clearParent} className="px-2 text-gray-400 hover:text-gray-600"><X size={14} /></button>
-                      : <span className="px-2 text-gray-400"><ChevronDown size={14} /></span>}
-                  </div>
-                  {parentOpen && parentOptions.length > 0 && (
-                    <div className="absolute z-10 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
-                      {parentOptions.map(t => (
-                        <div key={t.id} onMouseDown={() => selectParent(t)}
-                          className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer">
-                          {t.name}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+            <div className="p-5 space-y-4">
+              {editing?.is_system ? (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded p-2.5">
+                  <Lock size={13} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-xs text-amber-700">System type — only numbering can be configured</span>
                 </div>
+              ) : null}
+
+              {!editing?.is_system && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-0.5">Name *</label>
+                    <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                      placeholder="e.g. Tax Invoice" autoFocus
+                      className="w-full border border-gray-300 rounded text-sm py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-0.5">Parent</label>
+                    <div className="relative" ref={parentRef}>
+                      <div className="flex items-center border border-gray-300 rounded overflow-hidden">
+                        <input type="text" value={form.parent_search}
+                          onChange={e => { setForm(f => ({ ...f, parent_search: e.target.value, parent_id: null, deemed_auto: false })); setParentOpen(true); }}
+                          onFocus={() => setParentOpen(true)} placeholder="Search & select parent…"
+                          className="flex-1 text-sm py-1.5 px-2 focus:outline-none" />
+                        {form.parent_id
+                          ? <button onClick={clearParent} className="px-2 text-gray-400 hover:text-gray-600"><X size={14} /></button>
+                          : <span className="px-2 text-gray-400"><ChevronDown size={14} /></span>}
+                      </div>
+                      {parentOpen && parentOptions.length > 0 && (
+                        <div className="absolute z-10 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-48 overflow-y-auto">
+                          {parentOptions.map(t => (
+                            <div key={t.id} onMouseDown={() => selectParent(t)}
+                              className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer">{t.name}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Numbering Mode */}
+              <div className="flex items-center gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Voucher Numbering</label>
+                  <div className="flex gap-2">
+                    {(['manual', 'automatic'] as const).map(mode => (
+                      <button key={mode} type="button" onClick={() => setForm(f => ({ ...f, numbering_mode: mode }))}
+                        className={`px-4 py-1.5 text-sm rounded border font-medium capitalize transition-colors ${
+                          form.numbering_mode === mode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                        }`}>{mode}</button>
+                    ))}
+                  </div>
+                </div>
+                {form.numbering_mode === 'automatic' && (
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Width (digits)</label>
+                    <input type="number" min={1} max={10} value={form.vch_width}
+                      onChange={e => setForm(f => ({ ...f, vch_width: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) }))}
+                      className="w-20 border border-gray-300 rounded text-sm py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                  </div>
+                )}
+                {numPreview && (
+                  <div className="ml-auto bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
+                    <span className="text-xs text-blue-600">Preview:</span>
+                    <span className="font-mono font-bold text-blue-800 text-sm">{numPreview}</span>
+                  </div>
+                )}
               </div>
 
+              {/* Period tables — only when automatic */}
+              {form.numbering_mode === 'automatic' && (
+                <div className="border border-gray-200 rounded overflow-hidden">
+                  {/* 3-column Tally-style header */}
+                  <div className="grid grid-cols-3 divide-x divide-gray-200 bg-gray-50">
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-600 text-center">Restart Numbering</div>
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-600 text-center">Prefix Details</div>
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-600 text-center">Suffix Details</div>
+                  </div>
+                  <div className="grid grid-cols-3 divide-x divide-gray-200 bg-gray-50 border-t border-gray-100">
+                    <div className="grid grid-cols-3 px-2 py-1">
+                      <span className="text-[10px] text-gray-400 font-medium">Applicable From</span>
+                      <span className="text-[10px] text-gray-400 font-medium">Starting No.</span>
+                      <span className="text-[10px] text-gray-400 font-medium">Period</span>
+                    </div>
+                    <div className="grid grid-cols-2 px-2 py-1">
+                      <span className="text-[10px] text-gray-400 font-medium">Applicable From</span>
+                      <span className="text-[10px] text-gray-400 font-medium">Particulars</span>
+                    </div>
+                    <div className="grid grid-cols-2 px-2 py-1">
+                      <span className="text-[10px] text-gray-400 font-medium">Applicable From</span>
+                      <span className="text-[10px] text-gray-400 font-medium">Particulars</span>
+                    </div>
+                  </div>
+
+                  {/* Rows — max length of any array */}
+                  {Array.from({ length: Math.max(form.numbering_periods.length, form.prefix_periods.length, form.suffix_periods.length, 1) }).map((_, i) => {
+                    const np = form.numbering_periods[i];
+                    const pp = form.prefix_periods[i];
+                    const sp = form.suffix_periods[i];
+                    return (
+                      <div key={i} className="grid grid-cols-3 divide-x divide-gray-100 border-t border-gray-100 hover:bg-blue-50/30 group">
+                        {/* Restart numbering */}
+                        <div className="grid grid-cols-3 gap-1 px-2 py-1.5 items-center">
+                          {np ? <>
+                            <PeriodCell value={np.applicable_from} type="date"
+                              onChange={v => updatePeriodRow('numbering_periods', i, 'applicable_from', v)} />
+                            <PeriodCell value={String(np.start_no)} type="number"
+                              onChange={v => updatePeriodRow('numbering_periods', i, 'start_no', parseInt(v) || 1)} />
+                            <PeriodCell value={np.period_type}
+                              onChange={v => updatePeriodRow('numbering_periods', i, 'period_type', v)}
+                              options={[{ value: 'yearly', label: 'Yearly' }, { value: 'manual', label: 'Manual' }]} />
+                          </> : (
+                            <button onClick={() => addPeriodRow('numbering_periods')}
+                              className="col-span-3 text-xs text-blue-500 hover:text-blue-700 text-left px-1">+ Add</button>
+                          )}
+                        </div>
+                        {/* Prefix */}
+                        <div className="grid grid-cols-2 gap-1 px-2 py-1.5 items-center">
+                          {pp ? <>
+                            <PeriodCell value={pp.applicable_from} type="date"
+                              onChange={v => updatePeriodRow('prefix_periods', i, 'applicable_from', v)} />
+                            <PeriodCell value={pp.particulars} placeholder="e.g. INV/"
+                              onChange={v => updatePeriodRow('prefix_periods', i, 'particulars', v)} />
+                          </> : (
+                            <button onClick={() => addPeriodRow('prefix_periods')}
+                              className="col-span-2 text-xs text-blue-500 hover:text-blue-700 text-left px-1">+ Add</button>
+                          )}
+                        </div>
+                        {/* Suffix */}
+                        <div className="grid grid-cols-2 gap-1 px-2 py-1.5 items-center">
+                          {sp ? <>
+                            <PeriodCell value={sp.applicable_from} type="date"
+                              onChange={v => updatePeriodRow('suffix_periods', i, 'applicable_from', v)} />
+                            <PeriodCell value={sp.particulars} placeholder="e.g. /26"
+                              onChange={v => updatePeriodRow('suffix_periods', i, 'particulars', v)} />
+                          </> : (
+                            <button onClick={() => addPeriodRow('suffix_periods')}
+                              className="col-span-2 text-xs text-blue-500 hover:text-blue-700 text-left px-1">+ Add</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Add row button */}
+                  <div className="border-t border-gray-100 px-3 py-2 flex gap-4">
+                    <button onClick={() => { addPeriodRow('numbering_periods'); addPeriodRow('prefix_periods'); addPeriodRow('suffix_periods'); }}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium">+ Add Period Row</button>
+                    {(form.numbering_periods.length > 0 || form.prefix_periods.length > 0 || form.suffix_periods.length > 0) && (
+                      <button onClick={() => {
+                        const last = Math.max(form.numbering_periods.length, form.prefix_periods.length, form.suffix_periods.length) - 1;
+                        if (form.numbering_periods[last]) removePeriodRow('numbering_periods', last);
+                        if (form.prefix_periods[last]) removePeriodRow('prefix_periods', last);
+                        if (form.suffix_periods[last]) removePeriodRow('suffix_periods', last);
+                      }} className="text-xs text-red-400 hover:text-red-600">Remove last</button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <button onClick={handleSave} disabled={saving}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded py-2 mt-1">
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded py-2">
                 {saving ? 'Saving…' : editing ? 'Update' : 'Create'}
               </button>
             </div>

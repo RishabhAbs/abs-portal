@@ -146,6 +146,14 @@ export class ActivitiesController {
     return { success: true, data };
   }
 
+  @Get('customer/:customerId/pending-purchase')
+  @ApiOperation({ summary: 'Get pending (unbilled) purchase activities for a customer via server mapping' })
+  @RequirePermission('activities', 'view')
+  async findPendingPurchaseByCustomer(@Param('customerId') customerId: string) {
+    const data = await this.activitiesService.findPendingPurchaseByCustomer(customerId);
+    return { success: true, data };
+  }
+
   @Post('mark-billed')
   @ApiOperation({ summary: 'Mark activities as billed (link to a voucher by id, with vch_no cached)' })
   @RequirePermission('activities', 'edit')
