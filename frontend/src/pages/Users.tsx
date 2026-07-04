@@ -18,7 +18,7 @@ const Users: React.FC = () => {
   const [editing, setEditing] = useState<User | null>(null);
   const [pwdUserId, setPwdUserId] = useState('');
   const [newPwd, setNewPwd] = useState('');
-  const [form, setForm] = useState({ name: '', email: '', status: 'active' as User['status'], role: 'user' as 'admin' | 'user', tag: 'Inside' as 'Inside' | 'Outside', old_id: '' as string, sub_user_id: '' as string });
+  const [form, setForm] = useState({ name: '', email: '', status: 'active' as User['status'], role: 'user' as 'admin' | 'user', tag: 'Inside' as 'Inside' | 'Outside', old_id: '' as string, sub_user_id: '' as string, ledger_group_id: '' as string });
   const [legacyAdmins, setLegacyAdmins] = useState<any[]>([]);
 
   useEffect(() => {
@@ -160,7 +160,7 @@ const Users: React.FC = () => {
 
   const openAdd = () => {
     setEditing(null);
-    setForm({ name: '', email: '', status: 'active', role: 'user', tag: 'Inside', old_id: '', sub_user_id: '' });
+    setForm({ name: '', email: '', status: 'active', role: 'user', tag: 'Inside', old_id: '', sub_user_id: '', ledger_group_id: '' });
     setFormPerms(defaultPerms);
     setFormColPerms(defaultColPerms);
     setShowColPerms(false);
@@ -169,7 +169,7 @@ const Users: React.FC = () => {
 
   const openEdit = (u: User) => {
     setEditing(u);
-    setForm({ name: u.name, email: u.email, status: u.status, role: u.role, tag: u.tag || 'Inside', old_id: (u as any).old_id?.toString() || '', sub_user_id: (u as any).sub_user_id?.toString() || '' });
+    setForm({ name: u.name, email: u.email, status: u.status, role: u.role, tag: u.tag || 'Inside', old_id: (u as any).old_id?.toString() || '', sub_user_id: (u as any).sub_user_id?.toString() || '', ledger_group_id: (u as any).ledger_group_id?.toString() || '' });
     // Load existing permissions or default if missing
     setFormPerms({
       servers: u.permissions?.servers || defaultPerms.servers,
@@ -267,7 +267,7 @@ const Users: React.FC = () => {
     }
     if (editing) {
       // Update User Details
-      const r = await updateUser(editing.id, { ...form, old_id: form.old_id ? Number(form.old_id) : null, sub_user_id: form.sub_user_id || null });
+      const r = await updateUser(editing.id, { ...form, old_id: form.old_id ? Number(form.old_id) : null, sub_user_id: form.sub_user_id || null, ledger_group_id: form.ledger_group_id ? Number(form.ledger_group_id) : null } as any);
       if (!r.success) { showError('Error', r.message); return; }
 
       // Update Permissions
@@ -285,7 +285,7 @@ const Users: React.FC = () => {
       }
     } else {
       // Create User with Permissions
-      const r = await addUser({ ...form, old_id: form.old_id ? Number(form.old_id) : null, sub_user_id: form.sub_user_id || null, permissions: formPerms, column_permissions: formColPerms } as any, 'password123');
+      const r = await addUser({ ...form, old_id: form.old_id ? Number(form.old_id) : null, sub_user_id: form.sub_user_id || null, ledger_group_id: form.ledger_group_id ? Number(form.ledger_group_id) : null, permissions: formPerms, column_permissions: formColPerms } as any, 'password123');
       if (!r.success) { showError('Error', r.message); return; }
       showSuccess('Created', 'User created with default password: password123');
     }
@@ -1046,6 +1046,21 @@ const Users: React.FC = () => {
                       <option key={u.id} value={u.id}>{u.name} ({u.id})</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ledger Group</label>
+                  <select
+                    value={form.ledger_group_id}
+                    onChange={e => setForm({ ...form, ledger_group_id: e.target.value })}
+                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                  >
+                    <option value="">-- Not assigned (no ledger access) --</option>
+                    <option value="0">All Ledgers</option>
+                    {availableLedgerGroups.map((g: any) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400 mt-1">Not assigned = ledger reports are empty for this user. "All Ledgers" = sees everything (admins always do). A specific group = only ledgers under that group and its sub-groups.</p>
                 </div>
               </div>
 

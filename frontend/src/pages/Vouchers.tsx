@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer, Download } from 'lucide-react';
-import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi } from '../services/api';
+import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi, ledgerGroupApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
 
@@ -496,6 +496,11 @@ const Vouchers: React.FC = () => {
   const [selectedParentId, setSelectedParentId] = useState<number | null>(null);
 
   const [editId, setEditId] = useState<number | null>(null);
+  // Mirrors editId synchronously (refs update immediately, unlike state) so
+  // an async getNextNo response can check "are we still on this voucher?"
+  // before applying — otherwise a slow response from a previously-open
+  // voucher could land on whatever voucher is open now.
+  const editIdRef = useRef<number | null>(null);
   const [voucherNo, setVoucherNo]     = useState('');
   const [voucherDate, setVoucherDate] = useState(new Date().toISOString().slice(0, 10));
 
@@ -537,10 +542,12 @@ const Vouchers: React.FC = () => {
   const [activitiesToLink, setActivitiesToLink] = useState<string[]>([]);
 
   // Inline customer creation
+  const SUNDRY_DEBTORS_ID = 26; // ledgergroup id for parties (Sundry Debtors)
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
-  const blankCustForm = () => ({ company: '', mobile: '', gstin: '', email: '', pincode: '', address1: '', address2: '', area: '', state: '' });
+  const blankCustForm = () => ({ company: '', mobile: '', gstin: '', email: '', pincode: '', address1: '', address2: '', area: '', state: '', ledgergroup: SUNDRY_DEBTORS_ID });
   const [custForm, setCustForm] = useState(blankCustForm());
+  const [ledgerGroups, setLedgerGroups] = useState<any[]>([]);
 
   // Items
   const [lines, setLines]       = useState<LineItem[]>([emptyLine()]);
@@ -629,11 +636,23 @@ const Vouchers: React.FC = () => {
   // working state (billAllocEntries) is synced into this row's own billAlloc
   // array so each bill-by-bill row keeps its own independent allocations.
   const [activeJournalRowId, setActiveJournalRowId] = useState<string | null>(null);
-  // When parent changes, reset voucherType to first child
+  // When parent changes to something the current voucherType doesn't belong
+  // to, default to its first child. Deliberately does NOT reset whenever
+  // voucherType is already a valid child of selectedParentId — otherwise
+  // this fires on every incidental re-render (allVchTypes refetch, a quick
+  // link forcing a specific type, edit-mode Phase 2 resolving the real
+  // type) and stomps a type someone/something else just deliberately set,
+  // e.g. showing "Sales" with a blank item grid for a Payment voucher, or
+  // silently reverting a "create Tax Invoice for this customer" quick link
+  // back to whatever Sales' first child happens to be.
   useEffect(() => {
-    const first = allVchTypes.find(t => selectedParentId === null || t.parent_id === selectedParentId || t.id === selectedParentId);
-    setVoucherType(first?.name ?? '');
-  }, [selectedParentId, allVchTypes]);
+    if (params.id) return;
+    if ((location.state as any)?.editVoucher?.id) return;
+    const children = allVchTypes.filter(t => selectedParentId === null || t.parent_id === selectedParentId || t.id === selectedParentId);
+    if (children.some(t => t.name === voucherType)) return;
+    setVoucherType(children[0]?.name ?? '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedParentId, allVchTypes, params.id, (location.state as any)?.editVoucher?.id]);
 
   // Auto-generate voucher number when type changes (only for new vouchers, not editing).
   // We ALSO check the URL/state edit signal because there's a race: the
@@ -657,14 +676,20 @@ const Vouchers: React.FC = () => {
 
   // ----- Data loading -----
   useEffect(() => {
+    // Captured once at mount: are we opening this page to edit an existing
+    // voucher? If so, Phase 2 (below) owns selectedParentId/voucherType —
+    // defaulting to Sales here would otherwise race it.
+    const isEditRoute = !!params.id || !!(location.state as any)?.editVoucher?.id;
     vchTypeApi.getAll().then((r: any) => {
       if (r.success) {
         setAllVchTypes(r.data);
-        // Default select first system parent
-        // Default to Sales (preferred) or first system type
-        const salesType = r.data.find((t: VchTypeItem) => t.is_system === 1 && t.name === 'Sales');
-        const firstParent = salesType || r.data.find((t: VchTypeItem) => t.is_system === 1);
-        if (firstParent) setSelectedParentId(firstParent.id);
+        if (!isEditRoute) {
+          // Default select first system parent
+          // Default to Sales (preferred) or first system type
+          const salesType = r.data.find((t: VchTypeItem) => t.is_system === 1 && t.name === 'Sales');
+          const firstParent = salesType || r.data.find((t: VchTypeItem) => t.is_system === 1);
+          if (firstParent) setSelectedParentId(firstParent.id);
+        }
       }
     }).catch(() => {});
     itemsApi.getAll().then(r => { if (r.success) setProducts(r.data); }).catch(() => {});
@@ -1004,6 +1029,7 @@ const Vouchers: React.FC = () => {
   useEffect(() => {
     const v = editVoucherData;
     if (!v) return;
+    editIdRef.current = v.id;
     setEditId(v.id);
     setMobileStep(2); // skip type-selection screen when editing
 
@@ -1028,6 +1054,21 @@ const Vouchers: React.FC = () => {
       setRemark(v.remark || '');
       setCheckedBy(v.checked_by || null);
       setCheckedAt(v.checked_at || null);
+
+      // This voucher was saved without a number (e.g. imported, or created
+      // before automatic numbering was set up for its type). Suggest one now,
+      // same as a brand-new voucher would get, so it can be numbered on save.
+      // Guarded so it never overwrites an already-assigned number or a number
+      // the user is mid-typing: only applies if vch_no was empty on load, and
+      // only lands if the field is STILL empty and we're still on this voucher.
+      if (!v.vch_no && v.vch_type_id) {
+        vouchersApi.getNextNo(v.vch_type_id, v.vch_date ? v.vch_date.split('T')[0] : undefined)
+          .then((r: any) => {
+            if (r.success && r.data && editIdRef.current === v.id) {
+              setVoucherNo(current => current || r.data);
+            }
+          }).catch(() => {});
+      }
 
       // 3. Party — also resolve state to set isIgst correctly
       setPartyId(String(v.party_ledger_id));
@@ -1499,6 +1540,12 @@ const Vouchers: React.FC = () => {
       const el = newCustomerPopupRef.current?.querySelector('input:not([disabled]):not([type="hidden"])') as HTMLInputElement | null;
       el?.focus();
     }, 50);
+    // Ledger group options for the new party (default Sundry Debtors)
+    if (ledgerGroups.length === 0) {
+      ledgerGroupApi.getAll()
+        .then(res => { if (res.success) setLedgerGroups(res.data || []); })
+        .catch(() => { /* dropdown just stays with the default */ });
+    }
   }, [showNewCustomer]);
 
   useEffect(() => {
@@ -1528,12 +1575,20 @@ const Vouchers: React.FC = () => {
     const isCreditNote = voucherType.toLowerCase().includes('credit');
     setCloudPopup({ lineIdx, activities: [], selectedIds: new Set(), loading: true, isCreditNote });
     try {
+      // When editing an existing voucher, pass its id so the backend also
+      // returns activities already linked to THIS voucher (not just
+      // unbilled ones) — otherwise re-opening this popup on an edit makes
+      // the previously-picked activities vanish (they read as "billed"),
+      // and the user loses track of what was selected before.
       const res = isCreditNote
-        ? await activitiesApi.getPendingPurchaseByCustomer(partyId)
-        : await activitiesApi.getPendingByCustomer(partyId);
+        ? await activitiesApi.getPendingPurchaseByCustomer(partyId, editId ?? undefined)
+        : await activitiesApi.getPendingByCustomer(partyId, editId ?? undefined);
       const list = res.success ? res.data : [];
+      const preSelected = new Set(
+        list.filter((a: any) => editId && String(a.voucher_id) === String(editId)).map((a: any) => String(a.id))
+      );
       setCloudPopup(prev => prev && prev.lineIdx === lineIdx
-        ? { ...prev, activities: list, loading: false }
+        ? { ...prev, activities: list, selectedIds: preSelected, loading: false }
         : prev);
     } catch (e: any) {
       showError('Error', e.message || 'Failed to load pending activities');
@@ -1661,7 +1716,8 @@ const Vouchers: React.FC = () => {
         pincode: custForm.pincode.trim() || undefined, address1: custForm.address1.trim() || undefined,
         address2: custForm.address2.trim() || undefined, area: custForm.area.trim() || undefined,
         state: custForm.state.trim() || undefined, status: 'Active',
-      });
+        ledgergroup: custForm.ledgergroup || SUNDRY_DEBTORS_ID,
+      } as any);
       if (res.success && res.data) {
         setPartyDisplay(res.data.company || custForm.company);
         setPartyId(String(res.data.id));
@@ -2129,7 +2185,6 @@ const Vouchers: React.FC = () => {
   // Sundry Debtors (party customers) shouldn't appear in the items-mode
   // Add Ledger dropdown — they belong in the Customer Name field at the
   // top, not as contra ledgers on the same voucher. Hide them here.
-  const SUNDRY_DEBTORS_ID = 26;
   const ledgerOptions = (search: string) =>
     allLedgers
       .filter(l => l.ledgergroup !== SUNDRY_DEBTORS_ID)
@@ -2450,6 +2505,19 @@ const Vouchers: React.FC = () => {
                           className="text-red-400 p-2 flex-shrink-0"><X size={14} /></button>
                       )}
                     </div>
+                    {(() => {
+                      const prod = products.find((p: any) => String(p.id) === String(line.product_id));
+                      const named = (line.batch_rows || []).filter(b => (b.batch_name || '').trim()).length;
+                      if (prod?.batch !== 'Yes' && named === 0) return null;
+                      return (
+                        <div className="px-3 pb-1 -mt-1">
+                          <button type="button" onClick={() => openBatchPopup(idx)}
+                            className={`text-[11px] hover:underline ${named > 0 ? 'text-blue-500' : 'text-orange-500'}`}>
+                            {named > 0 ? `${named} serial(s) — edit` : 'Add batch / serial details'}
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {/* Qty | Rate | Amount — single-line label:value in bordered box */}
                     <div className="grid grid-cols-3 gap-2 px-3 py-2.5">
                       <label className="flex items-center gap-1 border border-gray-200 rounded-lg px-2.5 py-2.5 bg-gray-50 cursor-text">
@@ -3331,17 +3399,23 @@ const Vouchers: React.FC = () => {
                           );
                         })()}
                       </div>
-                      {line.batch_rows?.length ? (() => {
-                        const named = line.batch_rows.filter(b => (b.batch_name || '').trim()).length;
-                        if (named === 0) return null; // hide the "no serial" warning tag
+                      {(() => {
+                        const prod = products.find((p: any) => String(p.id) === String(line.product_id));
+                        const named = (line.batch_rows || []).filter(b => (b.batch_name || '').trim()).length;
+                        // Show the button whenever the item is batch-tracked
+                        // (even if no rows are saved yet) OR rows already
+                        // exist — otherwise a batch item loaded into an
+                        // existing voucher with empty batchRows has no way
+                        // to open the popup at all.
+                        if (prod?.batch !== 'Yes' && named === 0) return null;
                         return (
                           <button onClick={() => openBatchPopup(idx)}
-                            className="text-[10px] hover:underline mt-0.5 block text-blue-500"
-                            title="Edit serials">
-                            {`${named} serial(s) — edit`}
+                            className={`text-[10px] hover:underline mt-0.5 block ${named > 0 ? 'text-blue-500' : 'text-orange-500'}`}
+                            title={named > 0 ? 'Edit serials' : 'Add batch / serial details'}>
+                            {named > 0 ? `${named} serial(s) — edit` : 'Add batch details'}
                           </button>
                         );
-                      })() : null}
+                      })()}
                     </td>
                     <td className="py-1 px-1">
                       <input type="number" step="any" value={line.qty || ''}
@@ -3959,6 +4033,18 @@ const Vouchers: React.FC = () => {
                 <label className="block text-xs text-gray-500 mb-0.5">State (auto)</label>
                 <input readOnly value={custForm.state}
                   className="w-full border border-gray-100 rounded text-sm py-1.5 px-2 bg-gray-50 text-gray-500" />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs text-gray-500 mb-0.5">Ledger Group</label>
+                <select value={custForm.ledgergroup}
+                  onChange={e => setCustForm(f => ({ ...f, ledgergroup: Number(e.target.value) || SUNDRY_DEBTORS_ID }))}
+                  className="w-full border border-gray-300 rounded text-sm py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white">
+                  {ledgerGroups.length === 0 && <option value={SUNDRY_DEBTORS_ID}>Sundry Debtors</option>}
+                  {ledgerGroups.map((g: any) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-gray-400 mt-0.5">Which ledger group this party files under in Tally — usually Sundry Debtors.</p>
               </div>
             </div>
             <div className="px-4 pb-4">

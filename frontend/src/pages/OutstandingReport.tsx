@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, RotateCcw, Search, X } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, RotateCcw, Search, X, Columns3 } from 'lucide-react';
 import { vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
+import BillFollowupModal from '../components/Outstanding/BillFollowupModal';
 
 const fmt = (n: any) =>
   Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -18,6 +19,15 @@ const displayDate = (s?: string | null) => {
   const d = new Date(s);
   return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 };
+const statusBadge = (status: string) => {
+  switch (status) {
+    case 'Payment':     return 'bg-emerald-100 text-emerald-700';
+    case 'Followup':    return 'bg-blue-100 text-blue-700';
+    case 'Error':        return 'bg-red-100 text-red-700';
+    case 'Frustitting': return 'bg-orange-100 text-orange-700';
+    default:              return 'bg-slate-100 text-slate-600';
+  }
+};
 
 type Bill = {
   ledger_id: number | null;
@@ -30,13 +40,45 @@ type Bill = {
   age_days: number;
   opening_balance: number;
   closing_balance: number;
+  followup_status: string | null;
+  followup_person: string | null;
+  followup_phone: string | null;
+  followup_next_date: string | null;
+  followup_remark: string | null;
+  customer_person: string | null;
+  customer_mobile: string | null;
+  all_contacts: { person: string | null; mobile: string; is_primary: boolean }[];
 };
 type Side = 'all' | 'receivable' | 'payable';
 type SortKey = 'bill_name' | 'bill_date' | 'party_name' | 'group_name' | 'reseller_name' | 'age_days' | 'opening_balance' | 'closing_balance';
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZES = [25, 50, 100, 200];
+// Auto-fit row count is clamped to this range — enough to fill most
+// screens without ever cramming dozens of unreadable rows on a tall one.
+const MIN_AUTO_ROWS = 10;
+const MAX_AUTO_ROWS = 30;
 const STORAGE_KEY = 'outstanding-report-filters';
+const COLUMNS_KEY = 'outstanding-report-columns-v2';
+
+// Toggleable columns — # / Bill Name / Party Name / Age / Closing / Dr/Cr
+// always show (the report's core identity); everything else is optional
+// and hidden by default to keep the table concise, opt back in via the
+// Columns button.
+type ColKey = 'bill_date' | 'reseller' | 'group' | 'opening' | 'status' | 'person' | 'number' | 'next_date' | 'remark';
+const OPTIONAL_COLUMNS: { key: ColKey; label: string; defaultOn: boolean }[] = [
+  { key: 'status',     label: 'Status',      defaultOn: true },
+  { key: 'next_date',  label: 'Next Date',   defaultOn: true },
+  { key: 'bill_date',  label: 'Bill Date',   defaultOn: false },
+  { key: 'opening',    label: 'Opening',     defaultOn: false },
+  { key: 'reseller',   label: 'Reseller',    defaultOn: false },
+  { key: 'group',      label: 'Group',       defaultOn: false },
+  { key: 'person',     label: 'Person Name', defaultOn: true },
+  { key: 'number',     label: 'Number',      defaultOn: true },
+  { key: 'remark',     label: 'Remark',      defaultOn: false },
+];
+const defaultVisibleCols = (): Record<ColKey, boolean> =>
+  Object.fromEntries(OPTIONAL_COLUMNS.map(c => [c.key, c.defaultOn])) as Record<ColKey, boolean>;
 
 function fyBounds(d: Date) {
   const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
@@ -83,9 +125,24 @@ export default function OutstandingReport() {
   const [loading, setLoading] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [showColumns, setShowColumns] = useState(false);
   const [hideZero, setHideZero] = useState(false);
   const [bills, setBills] = useState<Bill[]>([]);
   const [totals, setTotals] = useState({ receivable: 0, payable: 0 });
+  const [followupTarget, setFollowupTarget] = useState<Bill | null>(null);
+  const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem(COLUMNS_KEY);
+      if (saved) return { ...defaultVisibleCols(), ...JSON.parse(saved) };
+    } catch { /* ignore */ }
+    return defaultVisibleCols();
+  });
+  useEffect(() => {
+    try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(visibleCols)); } catch { /* ignore */ }
+  }, [visibleCols]);
+  const toggleCol = (key: ColKey) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
+  // Always-on columns: #, Bill Name, Party Name, Age, Closing, Dr/Cr
+  const visibleColCount = 6 + OPTIONAL_COLUMNS.filter(c => visibleCols[c.key]).length;
 
   useEffect(() => {
     try {
@@ -117,7 +174,17 @@ export default function OutstandingReport() {
   const [sortKey, setSortKey] = useState<SortKey>('bill_date');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(10);
+  const [pageSize, setPageSize] = useState<number>(25);
+
+  // Fit exactly as many rows as the viewport allows — no internal table
+  // scroll, extra rows go to the next page instead. Recomputes on resize
+  // and stops once the user manually picks a Rows value from the dropdown.
+  const [autoPageSize, setAutoPageSize] = useState(true);
+  const [rowScale, setRowScale] = useState(1);
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const firstRowRef = useRef<HTMLTableRowElement>(null);
+  const tfootRef = useRef<HTMLTableSectionElement>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedParty(partySearch), 300);
@@ -157,6 +224,14 @@ export default function OutstandingReport() {
                 age_days: Number(b.age_days) || 0,
                 opening_balance: bal > 0 ? bal : 0,
                 closing_balance: bal,
+                followup_status: b.followup_status ?? null,
+                followup_person: b.followup_person ?? null,
+                followup_phone: b.followup_phone ?? null,
+                followup_next_date: b.followup_next_date ?? null,
+                followup_remark: b.followup_remark ?? null,
+                customer_person: b.customer_person ?? null,
+                customer_mobile: b.customer_mobile ?? null,
+                all_contacts: b.all_contacts ?? [],
               });
             }
           }
@@ -201,6 +276,34 @@ export default function OutstandingReport() {
   const endIdx = Math.min(startIdx + pageSize, totalRows);
   const pageRows = sorted.slice(startIdx, endIdx);
 
+  useEffect(() => {
+    if (!autoPageSize) return;
+    const computeRows = () => {
+      const wrap = tableWrapRef.current;
+      const rowH = firstRowRef.current?.getBoundingClientRect().height;
+      if (!wrap || !rowH) return;
+      const headerH = theadRef.current?.getBoundingClientRect().height || 0;
+      const footerH = tfootRef.current?.getBoundingClientRect().height || 0;
+      const available = wrap.clientHeight - headerH - footerH;
+      if (available <= 0) return;
+      // Clamp to a comfortable range — never cram dozens of unreadable
+      // rows on a tall screen, never under-fill on a short one.
+      const rawRows = Math.floor(available / rowH);
+      const rows = Math.min(Math.max(rawRows, MIN_AUTO_ROWS), MAX_AUTO_ROWS);
+      setPageSize(prev => (prev === rows ? prev : rows));
+      // If clamping left slack space (tall screen, few rows needed), scale
+      // the font up modestly so those rows still fill the space nicely
+      // instead of leaving a gap under the last row.
+      const scale = Math.min(Math.max(available / (rows * rowH), 1), 1.5);
+      setRowScale(prev => (Math.abs(prev - scale) < 0.02 ? prev : scale));
+    };
+    computeRows();
+    const ro = new ResizeObserver(computeRows);
+    if (tableWrapRef.current) ro.observe(tableWrapRef.current);
+    window.addEventListener('resize', computeRows);
+    return () => { ro.disconnect(); window.removeEventListener('resize', computeRows); };
+  }, [autoPageSize, pageRows.length]);
+
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(key); setSortDir('asc'); }
@@ -213,9 +316,12 @@ export default function OutstandingReport() {
       : <ChevronDown size={11} className="inline-block ml-1 text-blue-600" />;
   };
 
-  const cell = 'border border-slate-300 px-2.5 py-1.5 text-[14px] leading-snug';
+  // Font sizes intentionally NOT set here — they inherit from the <table>'s
+  // inline fontSize (scaled by rowScale). headCell uses an em-relative size
+  // so the header/body proportion holds at any scale.
+  const cell = 'border border-slate-300 px-2 py-1 leading-snug';
   const cellNum = `${cell} text-right tabular-nums whitespace-nowrap`;
-  const headCell = 'border border-slate-400 bg-slate-200 px-2.5 py-1.5 text-[13px] font-bold text-slate-700 uppercase tracking-wide sticky top-0 z-10';
+  const headCell = 'border border-slate-400 bg-slate-200 px-2 py-1 text-[0.88em] font-bold text-slate-700 uppercase tracking-wide sticky top-0 z-10';
   const headBtn = 'flex items-center select-none cursor-pointer hover:text-blue-700';
 
   return (
@@ -233,14 +339,14 @@ export default function OutstandingReport() {
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => { setShowSearch(s => !s); setShowFilter(false); }}
+            onClick={() => { setShowSearch(s => !s); setShowFilter(false); setShowColumns(false); }}
             className={`p-2 rounded-lg transition-colors ${showSearch ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
             title="Search"
           >
             <Search size={18} />
           </button>
           <button
-            onClick={() => { setShowFilter(s => !s); setShowSearch(false); }}
+            onClick={() => { setShowFilter(s => !s); setShowSearch(false); setShowColumns(false); }}
             className={`p-2 rounded-lg transition-colors relative ${showFilter ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
             title="Filter"
           >
@@ -252,6 +358,13 @@ export default function OutstandingReport() {
             )}
           </button>
           <button
+            onClick={() => { setShowColumns(s => !s); setShowSearch(false); setShowFilter(false); }}
+            className={`hidden sm:inline-flex p-2 rounded-lg transition-colors ${showColumns ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+            title="Show/hide columns"
+          >
+            <Columns3 size={18} />
+          </button>
+          <button
             onClick={load}
             className="p-2 rounded-lg text-slate-500 hover:bg-slate-100"
             title="Refresh"
@@ -261,6 +374,22 @@ export default function OutstandingReport() {
         </div>
       </div>
 
+      {/* ── Columns panel (slide-down, desktop only) ── */}
+      {showColumns && (
+        <div className="hidden sm:block flex-none bg-slate-50 border-b border-slate-200 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wide mr-1">Columns:</span>
+            {OPTIONAL_COLUMNS.map(c => (
+              <button key={c.key} onClick={() => toggleCol(c.key)}
+                className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors ${
+                  visibleCols[c.key] ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+                }`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Search bar (slide-down) ── */}
       {showSearch && (
@@ -358,7 +487,8 @@ export default function OutstandingReport() {
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-slate-900 text-[15px] leading-snug truncate">{b.party_name}</div>
                   <div className="text-[12px] text-slate-400 mt-0.5 truncate">
-                    {b.bill_name}{b.bill_date ? `  ·  ${displayDate(b.bill_date)}` : ''}
+                    <button onClick={() => setFollowupTarget(b)} className="text-blue-600 hover:underline font-medium">{b.bill_name}</button>
+                    {b.bill_date ? `  ·  ${displayDate(b.bill_date)}` : ''}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
@@ -371,93 +501,179 @@ export default function OutstandingReport() {
                 </div>
               </div>
               {/* ── Age badge + reseller ── */}
-              <div className="flex items-center gap-2 mt-1.5">
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ageBadge}`}>
                   {b.age_days}d
                 </span>
+                {b.followup_status && (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${statusBadge(b.followup_status)}`}>
+                    {b.followup_status}
+                  </span>
+                )}
                 {b.reseller_name && (
                   <span className="text-[12px] text-slate-400 truncate">{b.reseller_name}</span>
                 )}
               </div>
+              {(b.followup_person || b.followup_next_date || b.followup_remark) && (
+                <div className="text-[11px] text-slate-500 mt-1 truncate">
+                  {b.followup_person && <span className="font-medium text-slate-700">{b.followup_person}</span>}
+                  {b.followup_phone && <span> · {b.followup_phone}</span>}
+                  {b.followup_next_date && <span> · Next: {displayDate(b.followup_next_date)}</span>}
+                  {b.followup_remark && <span className="italic"> — {b.followup_remark}</span>}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
       {/* ── Desktop table ── */}
-      <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border border-slate-300 mx-3 mb-1 mt-1">
-        <table className="border-collapse text-[14px] w-full">
-          <thead>
+      <div ref={tableWrapRef} className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border border-slate-300 mx-3 mb-1 mt-1">
+        <table className="border-collapse w-full" style={{ fontSize: `${12.5 * rowScale}px` }}>
+          <thead ref={theadRef}>
             <tr>
-              <th className={`${headCell} text-center w-10`}>#</th>
-              <th className={`${headCell} text-left w-36`}>
+              <th className={`${headCell} text-center w-8`}>#</th>
+              <th className={`${headCell} text-left w-32`}>
                 <div className={headBtn} onClick={() => toggleSort('bill_name')}>Bill Name<SortIcon col="bill_name" /></div>
               </th>
-              <th className={`${headCell} text-left w-28`}>
-                <div className={headBtn} onClick={() => toggleSort('bill_date')}>Bill Date<SortIcon col="bill_date" /></div>
-              </th>
-              <th className={`${headCell} text-left`}>
+              {visibleCols.bill_date && (
+                <th className={`${headCell} text-left w-24`}>
+                  <div className={headBtn} onClick={() => toggleSort('bill_date')}>Bill Date<SortIcon col="bill_date" /></div>
+                </th>
+              )}
+              <th className={`${headCell} text-left w-40`}>
                 <div className={headBtn} onClick={() => toggleSort('party_name')}>Party Name<SortIcon col="party_name" /></div>
               </th>
-              <th className={`${headCell} text-left w-40`}>
-                <div className={headBtn} onClick={() => toggleSort('reseller_name')}>Reseller<SortIcon col="reseller_name" /></div>
-              </th>
-              <th className={`${headCell} text-left w-40`}>
-                <div className={headBtn} onClick={() => toggleSort('group_name')}>Group<SortIcon col="group_name" /></div>
-              </th>
-              <th className={`${headCell} text-center w-16`}>
+              {visibleCols.reseller && (
+                <th className={`${headCell} text-left w-32`}>
+                  <div className={headBtn} onClick={() => toggleSort('reseller_name')}>Reseller<SortIcon col="reseller_name" /></div>
+                </th>
+              )}
+              {visibleCols.group && (
+                <th className={`${headCell} text-left w-32`}>
+                  <div className={headBtn} onClick={() => toggleSort('group_name')}>Group<SortIcon col="group_name" /></div>
+                </th>
+              )}
+              <th className={`${headCell} text-center w-12`}>
                 <div className={headBtn + ' justify-center'} onClick={() => toggleSort('age_days')}>Age<SortIcon col="age_days" /></div>
               </th>
-              <th className={`${headCell} text-right w-36`}>
-                <div className={headBtn + ' justify-end'} onClick={() => toggleSort('opening_balance')}>Opening<SortIcon col="opening_balance" /></div>
-              </th>
-              <th className={`${headCell} text-right w-36`}>
+              {visibleCols.opening && (
+                <th className={`${headCell} text-right w-28`}>
+                  <div className={headBtn + ' justify-end'} onClick={() => toggleSort('opening_balance')}>Opening<SortIcon col="opening_balance" /></div>
+                </th>
+              )}
+              <th className={`${headCell} text-right w-28`}>
                 <div className={headBtn + ' justify-end'} onClick={() => toggleSort('closing_balance')}>Closing<SortIcon col="closing_balance" /></div>
               </th>
-              <th className={`${headCell} text-center w-12`}>Dr/Cr</th>
+              <th className={`${headCell} text-center w-10`}>Dr/Cr</th>
+              {visibleCols.status && <th className={`${headCell} text-center w-20`}>Status</th>}
+              {visibleCols.person && <th className={`${headCell} text-left w-28`}>Person Name</th>}
+              {visibleCols.number && <th className={`${headCell} text-left w-24`}>Number</th>}
+              {visibleCols.next_date && <th className={`${headCell} text-left w-20`}>Next Date</th>}
+              {visibleCols.remark && <th className={`${headCell} text-left w-36`}>Remark</th>}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} className={`${cell} text-center text-slate-400 py-10`}>Loading…</td></tr>
+              <tr><td colSpan={visibleColCount} className={`${cell} text-center text-slate-400 py-10`}>Loading…</td></tr>
             ) : pageRows.length === 0 ? (
-              <tr><td colSpan={10} className={`${cell} text-center text-slate-400 py-10`}>No outstanding bills between {displayDate(dateFrom)} and {displayDate(dateTo)}</td></tr>
+              <tr><td colSpan={visibleColCount} className={`${cell} text-center text-slate-400 py-10`}>No outstanding bills between {displayDate(dateFrom)} and {displayDate(dateTo)}</td></tr>
             ) : (
               pageRows.map((b, i) => {
                 const positive = b.closing_balance > 0;
                 const rowIdx = startIdx + i;
                 const zebra = rowIdx % 2 === 1 ? 'bg-slate-50' : 'bg-white';
                 return (
-                  <tr key={rowIdx} className={`${zebra} hover:bg-blue-50`}>
+                  <tr key={rowIdx} ref={i === 0 ? firstRowRef : undefined} className={`${zebra} hover:bg-blue-50`}>
                     <td className={`${cell} text-center text-slate-400 bg-slate-100 tabular-nums`}>{rowIdx + 1}</td>
-                    <td className={`${cell} font-medium text-slate-800 whitespace-nowrap`}>{b.bill_name}</td>
-                    <td className={`${cell} text-slate-600 whitespace-nowrap tabular-nums`}>{displayDate(b.bill_date)}</td>
-                    <td className={`${cell} text-slate-700`}>{b.party_name}</td>
-                    <td className={`${cell} text-slate-600`}>{b.reseller_name || '—'}</td>
-                    <td className={`${cell} text-slate-600`}>{b.group_name || '—'}</td>
+                    <td className={cell}>
+                      <button onClick={() => setFollowupTarget(b)} title={b.bill_name}
+                        className="text-blue-600 hover:text-blue-800 hover:underline font-medium truncate block max-w-[120px]">{b.bill_name}</button>
+                    </td>
+                    {visibleCols.bill_date && (
+                      <td className={`${cell} text-slate-600 whitespace-nowrap tabular-nums`}>{displayDate(b.bill_date)}</td>
+                    )}
+                    <td className={cell}><div className="text-slate-700 truncate max-w-[150px]" title={b.party_name}>{b.party_name}</div></td>
+                    {visibleCols.reseller && (
+                      <td className={cell}><div className="text-slate-600 truncate max-w-[120px]" title={b.reseller_name || ''}>{b.reseller_name || '—'}</div></td>
+                    )}
+                    {visibleCols.group && (
+                      <td className={cell}><div className="text-slate-600 truncate max-w-[120px]" title={b.group_name || ''}>{b.group_name || '—'}</div></td>
+                    )}
                     <td className={`${cell} text-center text-slate-600 tabular-nums`}>{b.age_days}d</td>
-                    <td className={cellNum + ' text-slate-700'}>{fmt(b.opening_balance)}</td>
+                    {visibleCols.opening && (
+                      <td className={cellNum + ' text-slate-700'}>{fmt(b.opening_balance)}</td>
+                    )}
                     <td className={cellNum + (positive ? ' text-emerald-700' : ' text-red-700') + ' font-semibold'}>
                       {fmt(Math.abs(b.closing_balance))}
                     </td>
                     <td className={`${cell} text-center font-semibold ${positive ? 'text-emerald-700' : 'text-red-700'}`}>
                       {positive ? 'Dr' : 'Cr'}
                     </td>
+                    {visibleCols.status && (
+                      <td className={`${cell} text-center`}>
+                        {b.followup_status ? (
+                          <span className={`text-[10.5px] font-bold px-2 py-0.5 rounded-full ${statusBadge(b.followup_status)}`}>{b.followup_status}</span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                    )}
+                    {visibleCols.person && (
+                      <td className={cell}><div className="text-slate-700 truncate max-w-[110px]" title={b.followup_person || ''}>{b.followup_person || <span className="text-slate-300">—</span>}</div></td>
+                    )}
+                    {visibleCols.number && (
+                      <td className={`${cell} text-slate-700 tabular-nums whitespace-nowrap`}>
+                        {b.followup_phone ? (
+                          <span className="inline-flex items-center gap-1">
+                            {b.followup_phone}
+                            {(() => {
+                              const primary = b.all_contacts.find(c => c.is_primary);
+                              if (!primary) return null;
+                              const isPrimary = primary.mobile === b.followup_phone;
+                              return (
+                                <span className={`text-[9px] font-bold px-1 rounded ${isPrimary ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  {isPrimary ? 'Primary' : 'Alt'}
+                                </span>
+                              );
+                            })()}
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                    )}
+                    {visibleCols.next_date && (
+                      <td className={`${cell} text-slate-600 whitespace-nowrap tabular-nums`}>{b.followup_next_date ? displayDate(b.followup_next_date) : <span className="text-slate-300">—</span>}</td>
+                    )}
+                    {visibleCols.remark && (
+                      <td className={cell}>
+                        <div className="text-slate-600 truncate max-w-[150px]" title={b.followup_remark || ''}>{b.followup_remark || <span className="text-slate-300">—</span>}</div>
+                      </td>
+                    )}
                   </tr>
                 );
               })
             )}
           </tbody>
-          {!loading && sorted.length > 0 && (
-            <tfoot>
-              <tr className="bg-slate-200 font-bold sticky bottom-0">
-                <td colSpan={7} className={`${cell} text-slate-700`}>Grand Total — {totalRows} bills</td>
-                <td className={cellNum + ' text-slate-700'}>{fmt(sorted.reduce((s, b) => s + b.opening_balance, 0))}</td>
-                <td className={cellNum + ' text-emerald-700'}>{fmt(totals.receivable)}</td>
-                <td className={`${cell} text-center text-slate-600`}>Dr</td>
-              </tr>
-            </tfoot>
-          )}
+          {!loading && sorted.length > 0 && (() => {
+            // Leading colSpan covers: #, Bill Name, [Bill Date], Party Name, [Reseller], [Group], Age
+            const leadingSpan = 4
+              + (visibleCols.bill_date ? 1 : 0)
+              + (visibleCols.reseller ? 1 : 0)
+              + (visibleCols.group ? 1 : 0);
+            const trailingSpan = (['status', 'person', 'number', 'next_date', 'remark'] as ColKey[])
+              .filter(k => visibleCols[k]).length;
+            return (
+              <tfoot ref={tfootRef}>
+                <tr className="bg-slate-200 font-bold sticky bottom-0">
+                  <td colSpan={leadingSpan} className={`${cell} text-slate-700`}>Grand Total — {totalRows} bills</td>
+                  {visibleCols.opening && (
+                    <td className={cellNum + ' text-slate-700'}>{fmt(sorted.reduce((s, b) => s + b.opening_balance, 0))}</td>
+                  )}
+                  <td className={cellNum + ' text-emerald-700'}>{fmt(totals.receivable)}</td>
+                  <td className={`${cell} text-center text-slate-600`}>Dr</td>
+                  {trailingSpan > 0 && <td colSpan={trailingSpan} className={cell} />}
+                </tr>
+              </tfoot>
+            );
+          })()}
         </table>
       </div>
 
@@ -490,8 +706,14 @@ export default function OutstandingReport() {
         <div className="flex-none flex items-center justify-between px-3 py-2 bg-white border-t border-slate-200 text-[13px] text-slate-700 print:hidden">
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] text-slate-400 hidden sm:inline">Rows:</span>
-            <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+            <select
+              value={autoPageSize ? 'auto' : String(pageSize)}
+              onChange={e => {
+                if (e.target.value === 'auto') setAutoPageSize(true);
+                else { setAutoPageSize(false); setPageSize(Number(e.target.value)); }
+              }}
               className="border border-slate-300 rounded px-1.5 py-0.5 text-[13px] bg-white">
+              <option value="auto">Auto ({pageSize})</option>
               {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </div>
@@ -516,6 +738,28 @@ export default function OutstandingReport() {
             </button>
           </div>
         </div>
+      )}
+
+      {followupTarget && followupTarget.ledger_id != null && (
+        <BillFollowupModal
+          isOpen={true}
+          onClose={() => setFollowupTarget(null)}
+          onSuccess={load}
+          data={{
+            ledger_id: followupTarget.ledger_id,
+            party_name: followupTarget.party_name,
+            bill_name: followupTarget.bill_name,
+            status: followupTarget.followup_status,
+            // Bill-specific followup contact wins if one's already been
+            // logged; otherwise default to the customer's own primary
+            // contact so the fields are never blank on first open.
+            person_name: followupTarget.followup_person || followupTarget.customer_person,
+            phone_number: followupTarget.followup_phone || followupTarget.customer_mobile,
+            next_date: followupTarget.followup_next_date,
+            remark: followupTarget.followup_remark,
+            contacts: followupTarget.all_contacts,
+          }}
+        />
       )}
     </div>
   );

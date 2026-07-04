@@ -594,8 +594,8 @@ export const activitiesApi = {
   }),
   getTotalUsers: (customerId: string) => fetchApi<{ success: boolean; data: { total_users: number } }>(`/activities/customer/${customerId}/total-users`),
   getLastExpiry: (customerId: string) => fetchApi<{ success: boolean; data: { last_expiry_date: string | null } }>(`/activities/customer/${customerId}/last-expiry`),
-  getPendingByCustomer: (customerId: string) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending`),
-  getPendingPurchaseByCustomer: (customerId: string) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending-purchase`),
+  getPendingByCustomer: (customerId: string, voucherId?: number) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending${voucherId ? `?voucher_id=${voucherId}` : ''}`),
+  getPendingPurchaseByCustomer: (customerId: string, voucherId?: number) => fetchApi<{ success: boolean; data: any[] }>(`/activities/customer/${customerId}/pending-purchase${voucherId ? `?voucher_id=${voucherId}` : ''}`),
   markBilled: (activityIds: string[], opts: { voucherId?: number; voucherNo?: string }) => fetchApi<{ success: boolean; updated: number }>('/activities/mark-billed', {
     method: 'POST',
     body: JSON.stringify({ activity_ids: activityIds, voucher_id: opts.voucherId, voucher_no: opts.voucherNo }),
@@ -921,6 +921,7 @@ export const vchTypeApi = {
   create: (data: any) => fetchApi<{ success: boolean; data: any; message: string }>('/vchtypes', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'DELETE' }),
+  getAudit: (id: number) => fetchApi<{ success: boolean; data: any[] }>(`/vchtypes/${id}/audit`),
 };
 
 export const otherLedgerApi = {
@@ -1034,6 +1035,50 @@ export const vouchersApi = {
     if (params.search)    q.append('search', params.search);
     return fetchApi<{ success: boolean; data: { rows: any[]; totals: any } }>(`/vouchers/stock-summary?${q.toString()}`);
   },
+  getStockGroupSummary: (params: { date_from?: string; date_to?: string; search?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.date_from) q.append('date_from', params.date_from);
+    if (params.date_to)   q.append('date_to', params.date_to);
+    if (params.search)    q.append('search', params.search);
+    return fetchApi<{ success: boolean; data: { rows: any[]; totals: any } }>(`/vouchers/stock-summary/groups?${q.toString()}`);
+  },
+  getStockGroupItems: (groupId: number, params: { date_from?: string; date_to?: string; search?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.date_from) q.append('date_from', params.date_from);
+    if (params.date_to)   q.append('date_to', params.date_to);
+    if (params.search)    q.append('search', params.search);
+    return fetchApi<{ success: boolean; data: { group: { id: number; name: string }; rows: any[]; totals: any } }>(`/vouchers/stock-summary/groups/${groupId}/items?${q.toString()}`);
+  },
+  getStockCategorySummary: (params: { date_from?: string; date_to?: string; search?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.date_from) q.append('date_from', params.date_from);
+    if (params.date_to)   q.append('date_to', params.date_to);
+    if (params.search)    q.append('search', params.search);
+    return fetchApi<{ success: boolean; data: { rows: any[]; totals: any } }>(`/vouchers/stock-summary/categories?${q.toString()}`);
+  },
+  getStockCategoryItems: (categoryId: number, params: { date_from?: string; date_to?: string; search?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.date_from) q.append('date_from', params.date_from);
+    if (params.date_to)   q.append('date_to', params.date_to);
+    if (params.search)    q.append('search', params.search);
+    return fetchApi<{ success: boolean; data: { group: { id: number; name: string }; rows: any[]; totals: any } }>(`/vouchers/stock-summary/categories/${categoryId}/items?${q.toString()}`);
+  },
+  getStockItemLedger: (params: { item_id: number; date_from?: string; date_to?: string; search?: string }) => {
+    const q = new URLSearchParams();
+    q.append('item_id', String(params.item_id));
+    if (params.date_from) q.append('date_from', params.date_from);
+    if (params.date_to)   q.append('date_to', params.date_to);
+    if (params.search)    q.append('search', params.search);
+    return fetchApi<{
+      success: boolean;
+      data: {
+        item: { id: number; name: string } | null;
+        opening: { qty: number; value: number };
+        closing: { qty: number; value: number };
+        rows: any[];
+      };
+    }>(`/vouchers/stock-item-ledger?${q.toString()}`);
+  },
   getOutstanding: (params: {
     as_of?: string;
     date_from?: string;
@@ -1051,11 +1096,20 @@ export const vouchersApi = {
     if (params.side)      q.append('side', params.side);
     return fetchApi<{ success: boolean; data: { bills: any[]; totalReceivable: number; totalPayable: number; asOf: string | null } }>(`/vouchers/outstanding?${q.toString()}`);
   },
+  upsertBillFollowup: (data: {
+    ledger_id: number; bill_name: string; status?: string; person_name?: string; phone_number?: string; next_date?: string; remark?: string;
+  }) => fetchApi<{ success: boolean }>('/vouchers/bill-followup', { method: 'POST', body: JSON.stringify(data) }),
   deleteVoucher: (id: number) => fetchApi<{ success: boolean }>(`/vouchers/${id}`, { method: 'DELETE' }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; data: any; message: string }>(`/vouchers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   getNextNo: (vchTypeId: number, forDate?: string) => fetchApi<{ success: boolean; data: string }>(`/vouchers/next-no?vch_type_id=${vchTypeId}${forDate ? `&for_date=${forDate}` : ''}`),
   markChecked:   (id: number) => fetchApi<{ success: boolean; message: string }>(`/vouchers/${id}/check`,   { method: 'POST' }),
   markUnchecked: (id: number) => fetchApi<{ success: boolean; message: string }>(`/vouchers/${id}/uncheck`, { method: 'POST' }),
+  retrofitNumbering: (params: {
+    vch_type_id: number; old_prefix: string; old_suffix: string; new_prefix: string; new_suffix: string;
+    from_date: string; to_date?: string; dry_run: boolean;
+  }) => fetchApi<{ success: boolean; data: { changed: { id: number; old: string; new: string }[]; skipped: { id: number; vch_no: string }[] } }>(
+    '/vouchers/retrofit-numbering', { method: 'POST', body: JSON.stringify(params) },
+  ),
 };
 
 export const attendanceApi = {
@@ -1134,6 +1188,10 @@ export const tallyApi = {
   syncSerial: (serial: string) => fetchApi<{ success: boolean; data?: any; message?: string }>('/tally/sync-serial', {
     method: 'POST',
     body: JSON.stringify({ serial }),
+  }),
+  markBilled: (data: { tallyserial: string; voucher_id: number }) => fetchApi<{ success: boolean; updated?: number; message?: string }>('/tally/mark-billed', {
+    method: 'POST',
+    body: JSON.stringify(data),
   }),
 };
 

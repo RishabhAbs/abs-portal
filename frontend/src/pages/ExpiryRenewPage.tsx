@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Calendar, Phone, Building2, User, Tag, Clock, ChevronLeft, ChevronRight, RefreshCw, AlertCircle, FileSpreadsheet, FileText, Copy } from 'lucide-react';
+import { Search, Calendar, Phone, Building2, User, Tag, Clock, ChevronLeft, ChevronRight, RefreshCw, AlertCircle, FileSpreadsheet, FileText, Copy, Receipt } from 'lucide-react';
 import { tallyApi } from '../services/api';
 import UpdateExpiryModal from '../components/Tally/UpdateExpiryModal';
+import QuickInvoiceModal from '../components/Tally/QuickInvoiceModal';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
 
@@ -52,6 +53,7 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
     
     const [selectedTally, setSelectedTally] = useState<any>(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [quickInvoiceTarget, setQuickInvoiceTarget] = useState<{ customerId: number; companyName: string; tallyserial?: string; tallyFlavourId?: number } | null>(null);
 
     const statuses = [
         { name: 'All', color: '#28a745' }, // Green
@@ -65,7 +67,10 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
         { name: 'Business-Closed', color: '#dc3545' }, // Red
         { name: 'Software-Change', color: '#ff8c00' }, // Dark Orange
         { name: 'Not In Use', color: '#c0392b' }, // Dark Red
-        { name: 'Reseller', color: '#922b21' } // Darker Red
+        { name: 'Reseller', color: '#922b21' }, // Darker Red
+        // Auto-set only — stamped when a voucher is created from this report
+        // (no manual way to pick it in the renewal-call status dropdown)
+        { name: 'Billed', color: '#16a34a' } // Green
     ];
 
     const [activeSearch, setActiveSearch] = useState('');
@@ -382,20 +387,41 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                                             )}
                                         </div>
                                     </td>
-                                    <td className="px-3 py-1.5 text-[12px] text-gray-700 border border-gray-300 whitespace-nowrap">
-                                        {item.tallyexpirydate ? new Date(item.tallyexpirydate).toLocaleDateString('en-GB') : 'N/A'}
+                                    <td className="px-3 py-1.5 text-[12px] text-gray-700 border border-gray-300 whitespace-nowrap overflow-hidden">
+                                        {item.tallyexpirydate ? (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setQuickInvoiceTarget({
+                                                        customerId: item.customerid, companyName: item.company_name,
+                                                        tallyserial: item.tallyserial,
+                                                        tallyFlavourId: item.tallyflavor ? Number(item.tallyflavor) : undefined,
+                                                    });
+                                                }}
+                                                className="hover:underline text-blue-700 hover:text-blue-900 cursor-pointer text-left"
+                                                title={item.billed_voucher_id ? `Billed — ${item.billed_vch_no || 'voucher created'}. Click to create another.` : 'Create Sales Tax Invoice for this customer'}
+                                            >
+                                                <span className="flex items-center gap-1">
+                                                    <Receipt className="h-3 w-3 flex-shrink-0" />
+                                                    {new Date(item.tallyexpirydate).toLocaleDateString('en-GB')}
+                                                </span>
+                                                {item.billed_voucher_id && (
+                                                    <span className="mt-0.5 inline-block text-[9px] leading-none font-bold uppercase bg-green-100 text-green-700 border border-green-300 rounded px-1 py-0.5">Billed</span>
+                                                )}
+                                            </button>
+                                        ) : 'N/A'}
                                     </td>
                                     <td className="px-3 py-1.5 text-[12px] font-bold text-gray-900 border border-gray-300 truncate group/company">
                                         <div className="flex items-center justify-between gap-1">
-                                            <button 
+                                            <button
                                                 onClick={(e) => { e.stopPropagation(); navigate('/search', { state: { customerId: item.customerid } }); }}
-                                                className="hover:underline text-blue-700 hover:text-blue-900 cursor-pointer text-left truncate" 
+                                                className="hover:underline text-blue-700 hover:text-blue-900 cursor-pointer text-left truncate"
                                                 title={item.company_name}
                                             >
                                                 {item.company_name}
                                             </button>
                                             {canCheckPermission(customerType === 'our' ? 'expiry_renew_our' : 'expiry_renew_not_our', 'copy') && (
-                                                <button 
+                                                <button
                                                     onClick={(e) => { e.stopPropagation(); copyToClipboard(item.company_name, 'Company Name'); }}
                                                     className="p-1 text-gray-300 hover:text-blue-500 opacity-0 group-hover/company:opacity-100 transition-opacity"
                                                     title="Copy Company"
@@ -478,6 +504,16 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                 onSuccess={fetchReport}
                 data={selectedTally}
             />
+
+            {/* Quick Sales Invoice Modal */}
+            {quickInvoiceTarget && (
+                <QuickInvoiceModal
+                    isOpen={true}
+                    onClose={() => setQuickInvoiceTarget(null)}
+                    onSuccess={fetchReport}
+                    data={quickInvoiceTarget}
+                />
+            )}
         </div>
     );
 };

@@ -676,9 +676,9 @@ export class CustomersService implements OnModuleInit {
       INSERT INTO customer (
         company, \`group\`, cloud_group_id, subgroupid, customerid, address1, address2, address3,
         pincode, area, state, city, gstin, email, mobile, person, remarks, status, date,
-        designation, whatsapp, tally, btype, grade, resellerid
+        designation, whatsapp, tally, btype, grade, resellerid, ledgergroup
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)
     `, [
       data.company,
       autoGroup || data.group || 3,
@@ -703,7 +703,10 @@ export class CustomersService implements OnModuleInit {
       data.tally || null,
       data.btype || null,
       data.grade || null,
-      resellerId
+      resellerId,
+      // Every party is a ledger too — default to Sundry Debtors (26) so the
+      // Tally export always carries a real group; caller may override.
+      Number((data as any).ledgergroup) || 26
     ]);
 
     const newId = result.insertId;

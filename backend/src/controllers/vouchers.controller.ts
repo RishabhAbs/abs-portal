@@ -108,6 +108,35 @@ export class VouchersController {
         return { success: true, data: vch_no };
     }
 
+    // Retroactively re-wraps already-saved voucher numbers when a prefix/suffix
+    // is edited — mutates historical financial records, so admin-only, and the
+    // frontend always calls with dry_run first to show a preview before commit.
+    @Post('retrofit-numbering')
+    @ApiOperation({ summary: '[Admin] Preview or apply a prefix/suffix change to already-saved voucher numbers' })
+    @RequireAnyPermission({ entity: 'vch_types', action: 'edit' })
+    async retrofitNumbering(@Body() body: any, @Request() req: any) {
+        if (req.user?.role?.toLowerCase() !== 'admin') {
+            throw new ForbiddenException('Only an admin can retrofit already-saved voucher numbers');
+        }
+        const vchTypeId = parseInt(body.vch_type_id, 10);
+        if (!vchTypeId || !body.from_date) {
+            throw new BadRequestException('vch_type_id and from_date are required');
+        }
+        const changedBy = req.user?.name || req.user?.id || null;
+        const result = await this.vouchersService.retrofitVoucherNumbering({
+            vchTypeId,
+            oldPrefix: body.old_prefix || '',
+            oldSuffix: body.old_suffix || '',
+            newPrefix: body.new_prefix || '',
+            newSuffix: body.new_suffix || '',
+            fromDate: body.from_date,
+            toDate: body.to_date || undefined,
+            changedBy,
+            dryRun: !!body.dry_run,
+        });
+        return { success: true, data: result };
+    }
+
     @Get('daybook')
     @ApiOperation({ summary: 'Get all vouchers for a specific date' })
     @RequireAnyPermission(
@@ -118,12 +147,14 @@ export class VouchersController {
         @Query('date') date?: string,
         @Query('date_from') dateFrom?: string,
         @Query('date_to') dateTo?: string,
+        @Request() req?: any,
     ) {
         const today = new Date().toISOString().split('T')[0];
         const data = await this.vouchersService.getDaybook({
             date: dateFrom || dateTo ? undefined : (date || today),
             dateFrom: dateFrom || undefined,
             dateTo: dateTo || undefined,
+            user: req?.user,
         });
         return { success: true, data };
     }
@@ -218,10 +249,12 @@ export class VouchersController {
     async getUserWiseOutstanding(
         @Query('as_of') asOf?: string,
         @Query('search') search?: string,
+        @Request() req?: any,
     ) {
         const data = await this.vouchersService.getUserWiseOutstanding({
             asOf: asOf || undefined,
             search: search || undefined,
+            user: req?.user,
         });
         return { success: true, data };
     }
@@ -246,6 +279,90 @@ export class VouchersController {
         return { success: true, data };
     }
 
+    @Get('stock-summary/groups')
+    @ApiOperation({ summary: 'Stock Summary, Tally-style — root item groups with rolled-up movement' })
+    @RequireAnyPermission(
+        { entity: 'reports_stock_summary', action: 'view' },
+        { entity: 'reports_daybook', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getStockGroupSummary(
+        @Query('date_from') dateFrom?: string,
+        @Query('date_to') dateTo?: string,
+        @Query('search') search?: string,
+    ) {
+        const data = await this.vouchersService.getStockGroupSummary({
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            search: search || undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Get('stock-summary/groups/:groupId/items')
+    @ApiOperation({ summary: 'Stock Summary drill-down — sub-groups + items directly in a group' })
+    @RequireAnyPermission(
+        { entity: 'reports_stock_summary', action: 'view' },
+        { entity: 'reports_daybook', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getStockGroupItems(
+        @Param('groupId', ParseIntPipe) groupId: number,
+        @Query('date_from') dateFrom?: string,
+        @Query('date_to') dateTo?: string,
+        @Query('search') search?: string,
+    ) {
+        const data = await this.vouchersService.getStockGroupItems({
+            groupId,
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            search: search || undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Get('stock-summary/categories')
+    @ApiOperation({ summary: 'Stock Summary, by Category — root item categories with rolled-up movement' })
+    @RequireAnyPermission(
+        { entity: 'reports_stock_summary', action: 'view' },
+        { entity: 'reports_daybook', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getStockCategorySummary(
+        @Query('date_from') dateFrom?: string,
+        @Query('date_to') dateTo?: string,
+        @Query('search') search?: string,
+    ) {
+        const data = await this.vouchersService.getStockCategorySummary({
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            search: search || undefined,
+        });
+        return { success: true, data };
+    }
+
+    @Get('stock-summary/categories/:categoryId/items')
+    @ApiOperation({ summary: 'Stock Summary by Category drill-down — sub-categories + items directly in a category' })
+    @RequireAnyPermission(
+        { entity: 'reports_stock_summary', action: 'view' },
+        { entity: 'reports_daybook', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getStockCategoryItems(
+        @Param('categoryId', ParseIntPipe) categoryId: number,
+        @Query('date_from') dateFrom?: string,
+        @Query('date_to') dateTo?: string,
+        @Query('search') search?: string,
+    ) {
+        const data = await this.vouchersService.getStockCategoryItems({
+            groupId: categoryId,
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            search: search || undefined,
+        });
+        return { success: true, data };
+    }
+
     @Get('outstanding')
     @ApiOperation({ summary: 'Outstanding bills (one row per (party, bill) with opening + closing)' })
     @RequireAnyPermission(
@@ -259,6 +376,7 @@ export class VouchersController {
         @Query('bill_name') billName?: string,
         @Query('search') search?: string,
         @Query('side') side?: 'receivable' | 'payable' | 'all',
+        @Request() req?: any,
     ) {
         const data = await this.vouchersService.getOutstanding({
             asOf: asOf || undefined,
@@ -267,8 +385,32 @@ export class VouchersController {
             billName: billName || undefined,
             search: search || undefined,
             side: side || 'all',
+            user: req?.user,
         });
         return { success: true, data };
+    }
+
+    @Post('bill-followup')
+    @ApiOperation({ summary: 'Log/update the payment-followup contact, next date, remark for an outstanding bill' })
+    @RequireAnyPermission(
+        { entity: 'reports_outstanding', action: 'edit' },
+        { entity: 'reports_outstanding', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async upsertBillFollowup(@Body() body: any, @Request() req: any) {
+        const ledgerId = parseInt(body.ledger_id, 10);
+        if (!ledgerId || !body.bill_name) throw new BadRequestException('ledger_id and bill_name are required');
+        const data = await this.vouchersService.upsertBillFollowup({
+            ledgerId,
+            billName: body.bill_name,
+            status: body.status || undefined,
+            personName: body.person_name || undefined,
+            phoneNumber: body.phone_number || undefined,
+            nextDate: body.next_date || undefined,
+            remark: body.remark || undefined,
+            updatedBy: req.user?.name || req.user?.id || null,
+        });
+        return data;
     }
 
     @Get('ledger')
@@ -282,11 +424,37 @@ export class VouchersController {
         @Query('date_from') dateFrom?: string,
         @Query('date_to') dateTo?: string,
         @Query('search') search?: string,
+        @Request() req?: any,
     ) {
         const id = parseInt(ledgerId, 10);
         if (!id || isNaN(id)) throw new BadRequestException('ledger_id is required');
         const data = await this.vouchersService.getLedgerStatement({
             ledgerId: id,
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            search: search || undefined,
+            user: req?.user,
+        });
+        return { success: true, data };
+    }
+
+    @Get('stock-item-ledger')
+    @ApiOperation({ summary: 'Stock item voucher register — Tally-style drill-down from Stock Summary' })
+    @RequireAnyPermission(
+        { entity: 'reports_stock_summary', action: 'view' },
+        { entity: 'reports_daybook', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getStockItemLedger(
+        @Query('item_id') itemId: string,
+        @Query('date_from') dateFrom?: string,
+        @Query('date_to') dateTo?: string,
+        @Query('search') search?: string,
+    ) {
+        const id = parseInt(itemId, 10);
+        if (!id || isNaN(id)) throw new BadRequestException('item_id is required');
+        const data = await this.vouchersService.getItemVoucherRegister({
+            itemId: id,
             dateFrom: dateFrom || undefined,
             dateTo: dateTo || undefined,
             search: search || undefined,

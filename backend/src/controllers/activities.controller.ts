@@ -139,18 +139,18 @@ export class ActivitiesController {
   }
 
   @Get('customer/:customerId/pending')
-  @ApiOperation({ summary: 'Get pending (unbilled) activities for a customer' })
+  @ApiOperation({ summary: 'Get pending (unbilled) activities for a customer, plus any already linked to voucher_id if given' })
   @RequirePermission('activities', 'view')
-  async findPendingByCustomer(@Param('customerId') customerId: string) {
-    const data = await this.activitiesService.findPendingByCustomer(customerId);
+  async findPendingByCustomer(@Param('customerId') customerId: string, @Query('voucher_id') voucherId?: string) {
+    const data = await this.activitiesService.findPendingByCustomer(customerId, voucherId ? Number(voucherId) : undefined);
     return { success: true, data };
   }
 
   @Get('customer/:customerId/pending-purchase')
-  @ApiOperation({ summary: 'Get pending (unbilled) purchase activities for a customer via server mapping' })
+  @ApiOperation({ summary: 'Get pending (unbilled) purchase activities for a customer via server mapping, plus any already linked to voucher_id if given' })
   @RequirePermission('activities', 'view')
-  async findPendingPurchaseByCustomer(@Param('customerId') customerId: string) {
-    const data = await this.activitiesService.findPendingPurchaseByCustomer(customerId);
+  async findPendingPurchaseByCustomer(@Param('customerId') customerId: string, @Query('voucher_id') voucherId?: string) {
+    const data = await this.activitiesService.findPendingPurchaseByCustomer(customerId, voucherId ? Number(voucherId) : undefined);
     return { success: true, data };
   }
 

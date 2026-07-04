@@ -278,6 +278,9 @@ export class UsersService implements OnModuleInit {
       // Target Setup list, the admin's Targets filter dropdown, and the user's own
       // dashboard Targets section. Default 1 to preserve current behavior.
       if (!colNames.includes('allot_target')) await this.db.execute(`ALTER TABLE cloud_users ADD COLUMN allot_target TINYINT(1) DEFAULT 1`);
+      // Optional ledger-group scope: when set (non-admin), ledger pickers only
+      // show ledgers filed under this group (or its child groups). NULL = all.
+      if (!colNames.includes('ledger_group_id')) await this.db.execute(`ALTER TABLE cloud_users ADD COLUMN ledger_group_id INT DEFAULT NULL`);
 
       // Also ensure customer table has cloud_group_id and subgroupid columns
       // (needed by user save bulk-update logic)
@@ -299,11 +302,12 @@ export class UsersService implements OnModuleInit {
   async findAll(): Promise<User[]> {
     const users = await this.db.query<any>(`
       SELECT cu.id, cu.name, cu.email, cu.role, cu.status, cu.permissions, cu.column_permissions, cu.created_at, cu.updated_at, cu.is_two_fa_enabled, cu.tag,
-             cu.old_id, cu.sub_user_id, cu.allot_target,
-             a1.name as old_name, cu2.name as sub_user_name
+             cu.old_id, cu.sub_user_id, cu.allot_target, cu.ledger_group_id,
+             a1.name as old_name, cu2.name as sub_user_name, lgrp.name as ledger_group_name
       FROM cloud_users cu
       LEFT JOIN admin a1 ON a1.id = cu.old_id
       LEFT JOIN cloud_users cu2 ON cu2.id = cu.sub_user_id
+      LEFT JOIN ledgergroup lgrp ON lgrp.id = cu.ledger_group_id
       ORDER BY cu.created_at DESC
     `);
 
@@ -423,6 +427,14 @@ export class UsersService implements OnModuleInit {
       JSON.stringify(columnPerms)
     ]);
 
+    // Group / sub-user / ledger-group assignments come through the same
+    // create form — apply them via update() so both paths share one code path.
+    const extras: any = {};
+    if ((data as any).old_id !== undefined)          extras.old_id = (data as any).old_id;
+    if ((data as any).sub_user_id !== undefined)     extras.sub_user_id = (data as any).sub_user_id;
+    if ((data as any).ledger_group_id !== undefined) extras.ledger_group_id = (data as any).ledger_group_id;
+    if (Object.keys(extras).length) await this.update(id, extras);
+
     return this.findById(id);
   }
 
@@ -457,6 +469,16 @@ export class UsersService implements OnModuleInit {
     if (allotTarget !== undefined) {
       fields.push('allot_target = ?');
       values.push(allotTarget ? 1 : 0);
+    }
+    // ledger_group_id — ledger visibility for this user:
+    //   NULL = not assigned → sees NO ledgers in ledger reports/pickers
+    //   0    = "All Ledgers" sentinel → unrestricted
+    //   >0   = only that group and its child groups
+    const ledgerGroupId = (data as any).ledger_group_id;
+    if (ledgerGroupId !== undefined) {
+      fields.push('ledger_group_id = ?');
+      const n = Number(ledgerGroupId);
+      values.push(ledgerGroupId === null || ledgerGroupId === '' || !Number.isFinite(n) ? null : n);
     }
 
     if (fields.length > 0) {

@@ -50,6 +50,7 @@ import LedgerReport from './pages/LedgerReport';
 import SalesRegister from './pages/SalesRegister';
 import GroupSummary from './pages/GroupSummary';
 import StockSummary from './pages/StockSummary';
+import StockItemLedger from './pages/StockItemLedger';
 import UserWiseOutstanding from './pages/UserWiseOutstanding';
 import PrintVoucher from './pages/PrintVoucher';
 import BillReport from './pages/BillReport';
@@ -228,6 +229,7 @@ function App() {
                   <Route path="sales-register" element={<PermissionGuard entity={['reports_sales_register', 'reports_daybook']}><SalesRegister /></PermissionGuard>} />
                   <Route path="group-summary" element={<PermissionGuard entity={['reports_group_summary', 'reports_daybook']}><GroupSummary /></PermissionGuard>} />
                   <Route path="stock-summary" element={<PermissionGuard entity={['reports_stock_summary', 'reports_daybook']}><StockSummary /></PermissionGuard>} />
+                  <Route path="stock-item" element={<PermissionGuard entity={['reports_stock_summary', 'reports_daybook']}><StockItemLedger /></PermissionGuard>} />
                   <Route path="user-outstanding" element={<PermissionGuard entity={['reports_user_outstanding', 'reports_outstanding']}><UserWiseOutstanding /></PermissionGuard>} />
                 </Route>
                 <Route path="pincodes" element={<PermissionGuard entity="pincodes"><Pincode /></PermissionGuard>} />

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Request, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { VchTypeService } from '../services/vchtype.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
@@ -36,9 +36,17 @@ export class VchTypeController {
     @Put(':id')
     @ApiOperation({ summary: 'Update voucher type' })
     @RequirePermission('vch_types', 'edit')
-    async update(@Param('id') id: string, @Body() body: any) {
-        await this.vchTypeService.update(parseInt(id, 10), body);
+    async update(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+        await this.vchTypeService.update(parseInt(id, 10), body, req.user?.name || req.user?.id || null);
         return { success: true, message: 'Voucher type updated' };
+    }
+
+    @Get(':id/audit')
+    @ApiOperation({ summary: 'Numbering/prefix/suffix config history for a voucher type' })
+    @RequirePermission('vch_types', 'edit')
+    async audit(@Param('id') id: string) {
+        const data = await this.vchTypeService.getAudit(parseInt(id, 10));
+        return { success: true, data };
     }
 
     @Delete(':id')

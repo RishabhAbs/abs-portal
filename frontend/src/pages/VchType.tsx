@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Pencil, Trash2, X, ChevronDown, Search, Lock, Settings } from 'lucide-react';
-import { vchTypeApi } from '../services/api';
+import { vchTypeApi, vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
 
@@ -78,6 +78,21 @@ const VchType: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<VchTypeItem | null>(null);
   const [deleting, setDeleting]         = useState(false);
 
+  // Numbering config history — snapshots taken automatically before each
+  // save, so a bad prefix/suffix/numbering edit can be reviewed and restored.
+  const [showAudit, setShowAudit]   = useState(false);
+  const [auditList, setAuditList]   = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  // Preview shown before retroactively re-wrapping already-saved voucher
+  // numbers to match an edited prefix/suffix. Null when no preview is open.
+  const [retrofitPreview, setRetrofitPreview] = useState<{
+    params: { vch_type_id: number; old_prefix: string; old_suffix: string; new_prefix: string; new_suffix: string; from_date: string; to_date?: string };
+    changed: { id: number; old: string; new: string }[];
+    skipped: { id: number; vch_no: string }[];
+  } | null>(null);
+  const [retrofitBusy, setRetrofitBusy] = useState(false);
+
   const fetchTypes = async () => {
     try {
       const res = await vchTypeApi.getAll();
@@ -99,7 +114,7 @@ const VchType: React.FC = () => {
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const openCreate = () => { setEditing(null); setForm(defaultForm()); setShowPopup(true); };
+  const openCreate = () => { setEditing(null); setForm(defaultForm()); setShowAudit(false); setAuditList([]); setShowPopup(true); };
 
   const openEdit = (t: VchTypeItem) => {
     setEditing(t);
@@ -112,7 +127,40 @@ const VchType: React.FC = () => {
       prefix_periods:    (t.prefix_periods || []).map(p => ({ ...p })),
       suffix_periods:    (t.suffix_periods || []).map(p => ({ ...p })),
     });
+    setShowAudit(false);
+    setAuditList([]);
     setShowPopup(true);
+  };
+
+  const loadAudit = async (typeId: number) => {
+    setAuditLoading(true);
+    try {
+      const res = await vchTypeApi.getAudit(typeId);
+      if (res.success) setAuditList(res.data);
+    } catch {}
+    setAuditLoading(false);
+  };
+
+  const toggleAudit = () => {
+    const next = !showAudit;
+    setShowAudit(next);
+    if (next && editing && auditList.length === 0) loadAudit(editing.id);
+  };
+
+  // Loads a past snapshot into the form for review — does NOT save by
+  // itself. The admin still has to click Update to confirm the restore,
+  // same validated path as any other edit.
+  const restoreSnapshot = (snapshot: any) => {
+    setForm(f => ({
+      ...f,
+      numbering_mode: snapshot.numbering_mode || 'manual',
+      vch_width: snapshot.vch_width || 3,
+      numbering_periods: (snapshot.numbering_periods || []).map((p: any) => ({ ...p })),
+      prefix_periods:    (snapshot.prefix_periods || []).map((p: any) => ({ ...p })),
+      suffix_periods:    (snapshot.suffix_periods || []).map((p: any) => ({ ...p })),
+    }));
+    setShowAudit(false);
+    showSuccess('Restored', 'Snapshot loaded into the form — review and click Update to confirm.');
   };
 
   const handleSave = async () => {
@@ -133,13 +181,82 @@ const VchType: React.FC = () => {
       }
       if (editing) {
         const res = await vchTypeApi.update(editing.id, payload);
-        if (res.success) { showSuccess('Updated', 'Voucher type updated'); setShowPopup(false); fetchTypes(); }
+        if (res.success) {
+          showSuccess('Updated', 'Voucher type updated');
+          setShowPopup(false);
+          fetchTypes();
+          await maybeOfferRetrofit(editing, form);
+        }
       } else {
         const res = await vchTypeApi.create(payload);
         if (res.success) { showSuccess('Created', 'Voucher type created'); setShowPopup(false); fetchTypes(); }
       }
     } catch (e: any) { showError('Error', e.message || 'Failed'); }
     finally { setSaving(false); }
+  };
+
+  // Finds the earliest applicable_from across all three period tables that
+  // falls strictly after `after` — i.e. "until any other effective date
+  // comes", matching how the numbering itself is period-bounded.
+  const nextBoundaryAfter = (f: typeof form, after: string): string | undefined => {
+    const dates = [...f.numbering_periods, ...f.prefix_periods, ...f.suffix_periods]
+      .map(p => p.applicable_from).filter(d => d && d > after);
+    return dates.length ? dates.sort()[0] : undefined;
+  };
+
+  // Fetches a retrofit preview for oldPrefix/oldSuffix -> the form's current
+  // prefix/suffix and shows the confirmation dialog if anything would change.
+  // silent=true (the automatic post-save check) skips the "nothing to do"
+  // toasts — only the explicit manual button call surfaces those.
+  const previewRetrofit = async (typeId: number, oldPrefix: string, oldSuffix: string, now: typeof form, silent: boolean) => {
+    if (now.numbering_mode !== 'automatic') return;
+    const newPrefix = now.prefix_periods[0]?.particulars || '';
+    const newSuffix = now.suffix_periods[0]?.particulars || '';
+    const fromDate  = now.prefix_periods[0]?.applicable_from || now.suffix_periods[0]?.applicable_from;
+    if (!fromDate || (oldPrefix === newPrefix && oldSuffix === newSuffix)) {
+      if (!silent) showError('Nothing to renumber', 'The current prefix/suffix already matches — no existing vouchers need changing.');
+      return;
+    }
+    const toDate = nextBoundaryAfter(now, fromDate);
+    const params = { vch_type_id: typeId, old_prefix: oldPrefix, old_suffix: oldSuffix, new_prefix: newPrefix, new_suffix: newSuffix, from_date: fromDate, to_date: toDate };
+    try {
+      const res = await vouchersApi.retrofitNumbering({ ...params, dry_run: true });
+      if (res.success && res.data.changed.length > 0) {
+        setRetrofitPreview({ params, changed: res.data.changed, skipped: res.data.skipped });
+      } else if (!silent) {
+        showError('Nothing to renumber', 'No already-saved vouchers matched the previous format in this period.');
+      }
+    } catch (e: any) { if (!silent) showError('Error', e.message || 'Failed to preview'); }
+  };
+
+  // After saving, if the (first) prefix or suffix text actually changed,
+  // offer to re-wrap already-saved vouchers dated in that period to match —
+  // preview only; nothing is touched until the admin explicitly confirms.
+  const maybeOfferRetrofit = async (was: VchTypeItem, now: typeof form) => {
+    const oldPrefix = was.prefix_periods?.[0]?.particulars || '';
+    const oldSuffix = was.suffix_periods?.[0]?.particulars || '';
+    await previewRetrofit(was.id, oldPrefix, oldSuffix, now, true);
+  };
+
+  // Manual trigger for a config that was already saved earlier (so there's
+  // no "just changed" text to auto-detect) — assumes existing plain numbers
+  // had no prefix/suffix, which is the common case for pre-existing vouchers.
+  const manualRetrofit = () => {
+    if (!editing) return;
+    previewRetrofit(editing.id, '', '', form, false);
+  };
+
+  const applyRetrofit = async () => {
+    if (!retrofitPreview) return;
+    setRetrofitBusy(true);
+    try {
+      const res = await vouchersApi.retrofitNumbering({ ...retrofitPreview.params, dry_run: false });
+      if (res.success) {
+        showSuccess('Renumbered', `${res.data.changed.length} voucher(s) updated to the new format.`);
+        setRetrofitPreview(null);
+      }
+    } catch (e: any) { showError('Error', e.message || 'Failed to apply'); }
+    finally { setRetrofitBusy(false); }
   };
 
   const handleDelete = async () => {
@@ -368,12 +485,60 @@ const VchType: React.FC = () => {
                   </div>
                 )}
                 {numPreview && (
-                  <div className="ml-auto bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
+                  <div className="bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
                     <span className="text-xs text-blue-600">Preview:</span>
                     <span className="font-mono font-bold text-blue-800 text-sm">{numPreview}</span>
                   </div>
                 )}
+                {editing && form.numbering_mode === 'automatic' && (
+                  <button type="button" onClick={manualRetrofit}
+                    className="text-xs text-amber-700 hover:text-amber-900 underline">
+                    Renumber existing vouchers to this format
+                  </button>
+                )}
+                {editing && (
+                  <button type="button" onClick={toggleAudit}
+                    className="ml-auto text-xs text-gray-500 hover:text-blue-600 underline">
+                    {showAudit ? 'Hide history' : 'View history'}
+                  </button>
+                )}
               </div>
+
+              {/* Numbering config history — snapshots taken automatically before each save */}
+              {editing && showAudit && (
+                <div className="border border-gray-200 rounded overflow-hidden">
+                  <div className="px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50">
+                    Numbering History
+                  </div>
+                  {auditLoading ? (
+                    <div className="px-3 py-3 text-xs text-gray-400">Loading…</div>
+                  ) : auditList.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-gray-400">No prior changes recorded yet.</div>
+                  ) : (
+                    <div className="divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                      {auditList.map(a => {
+                        const s = a.snapshot || {};
+                        const prefix = s.prefix_periods?.[0]?.particulars || '';
+                        const suffix = s.suffix_periods?.[0]?.particulars || '';
+                        const start  = s.numbering_periods?.[0]?.start_no ?? 1;
+                        const preview = s.numbering_mode === 'automatic'
+                          ? `${prefix}${String(start).padStart(s.vch_width || 3, '0')}${suffix}`
+                          : 'Manual';
+                        return (
+                          <div key={a.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-blue-50/30">
+                            <div>
+                              <div className="text-gray-700">{new Date(a.changed_at).toLocaleString()}</div>
+                              <div className="text-gray-400">{a.changed_by || 'Unknown'} · <span className="font-mono">{preview}</span></div>
+                            </div>
+                            <button onClick={() => restoreSnapshot(s)}
+                              className="text-blue-600 hover:text-blue-800 font-medium shrink-0">Restore</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Period tables — only when automatic */}
               {form.numbering_mode === 'automatic' && (
@@ -489,6 +654,43 @@ const VchType: React.FC = () => {
               <button onClick={handleDelete} disabled={deleting}
                 className="px-4 py-1.5 text-sm text-white bg-red-500 hover:bg-red-600 disabled:bg-red-300 rounded">
                 {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Retrofit already-saved voucher numbers to a changed prefix/suffix */}
+      {retrofitPreview && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl p-5 w-[520px] max-w-full">
+            <h3 className="font-semibold text-gray-800 mb-2">Apply new format to existing vouchers?</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              You changed the prefix/suffix. <strong>{retrofitPreview.changed.length}</strong> already-saved voucher(s)
+              in this period can be renamed to match — nothing has been changed yet.
+            </p>
+            <div className="border border-gray-200 rounded max-h-56 overflow-y-auto mb-2">
+              {retrofitPreview.changed.map(c => (
+                <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs border-b border-gray-100 last:border-0">
+                  <span className="font-mono text-gray-500">{c.old}</span>
+                  <span className="text-gray-300">→</span>
+                  <span className="font-mono text-blue-700 font-medium">{c.new}</span>
+                </div>
+              ))}
+            </div>
+            {retrofitPreview.skipped.length > 0 && (
+              <p className="text-xs text-amber-600 mb-3">
+                {retrofitPreview.skipped.length} voucher(s) skipped — their number doesn't match the previous prefix/suffix pattern, so they were left untouched.
+              </p>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setRetrofitPreview(null)} disabled={retrofitBusy}
+                className="px-4 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+                Leave as-is
+              </button>
+              <button onClick={applyRetrofit} disabled={retrofitBusy}
+                className="px-4 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 rounded">
+                {retrofitBusy ? 'Applying…' : `Apply to ${retrofitPreview.changed.length} voucher(s)`}
               </button>
             </div>
           </div>

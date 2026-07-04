@@ -72,15 +72,100 @@ export class TallySyncController {
         @Body() body: { ids?: number[] },
     ) {
         checkKey(apiKey);
-        const ids = body?.ids;
-        if (!Array.isArray(ids) || ids.length === 0) {
-            throw new BadRequestException('ids must be a non-empty array of voucher IDs');
-        }
-        const nums = ids.map(Number).filter(n => Number.isFinite(n) && n > 0);
-        if (nums.length === 0) {
-            throw new BadRequestException('ids must contain valid positive integers');
-        }
-        const result = await this.tallyService.acknowledgeTallySync(nums);
+        const result = await this.tallyService.acknowledgeTallySync(parseIds(body));
         return { success: true, ...result };
     }
+
+    /**
+     * GET /api/tally-sync/items
+     *
+     * Stock item masters. Tally should import these (and ledgers) BEFORE
+     * vouchers so every <STOCKITEM> referenced by a voucher already exists.
+     * Same poll-and-acknowledge contract as vouchers: unsynced by default,
+     * acknowledge with POST /api/tally-sync/items/acknowledge.
+     *
+     * Query params: page (default 1), limit (default 100, max 500),
+     *               include_all=1 to also return already-synced items.
+     */
+    @Get('items')
+    async getItems(
+        @Headers('x-tally-key') apiKey: string,
+        @Query('page')        page?: string,
+        @Query('limit')       limit?: string,
+        @Query('include_all') includeAll?: string,
+        @Query('search')      search?: string,
+    ) {
+        checkKey(apiKey);
+        const result = await this.tallyService.getTallyItems({
+            page:       page  ? parseInt(page,  10) : 1,
+            limit:      limit ? parseInt(limit, 10) : 100,
+            includeAll: includeAll === '1',
+            search:     search || undefined,
+        });
+        return { success: true, ...result };
+    }
+
+    /** POST /api/tally-sync/items/acknowledge — Body: { "ids": [...] } */
+    @Post('items/acknowledge')
+    async acknowledgeItems(
+        @Headers('x-tally-key') apiKey: string,
+        @Body() body: { ids?: number[] },
+    ) {
+        checkKey(apiKey);
+        const result = await this.tallyService.acknowledgeTallyItems(parseIds(body));
+        return { success: true, ...result };
+    }
+
+    /**
+     * GET /api/tally-sync/ledgers
+     *
+     * Ledger masters — one row per customer record (the customer table is
+     * this app's ledger master; voucher party and ledger entries reference
+     * it). Includes group, GSTIN, full address with resolved state, contact,
+     * opening balance and bill-by-bill flag.
+     *
+     * Query params: page (default 1), limit (default 100, max 500),
+     *               include_all=1 to also return already-synced ledgers.
+     */
+    @Get('ledgers')
+    async getLedgers(
+        @Headers('x-tally-key') apiKey: string,
+        @Query('page')        page?: string,
+        @Query('limit')       limit?: string,
+        @Query('include_all') includeAll?: string,
+        @Query('search')      search?: string,
+    ) {
+        checkKey(apiKey);
+        const result = await this.tallyService.getTallyLedgers({
+            page:       page  ? parseInt(page,  10) : 1,
+            limit:      limit ? parseInt(limit, 10) : 100,
+            includeAll: includeAll === '1',
+            search:     search || undefined,
+        });
+        return { success: true, ...result };
+    }
+
+    /** POST /api/tally-sync/ledgers/acknowledge — Body: { "ids": [...] } */
+    @Post('ledgers/acknowledge')
+    async acknowledgeLedgers(
+        @Headers('x-tally-key') apiKey: string,
+        @Body() body: { ids?: number[] },
+    ) {
+        checkKey(apiKey);
+        const result = await this.tallyService.acknowledgeTallyLedgers(parseIds(body));
+        return { success: true, ...result };
+    }
+}
+
+/** Shared body validation for all acknowledge endpoints. */
+function parseIds(body: { ids?: number[] }): number[] {
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+        throw new BadRequestException('ids must be a non-empty array of IDs');
+    }
+    const nums = ids.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    if (nums.length === 0) {
+        throw new BadRequestException('ids must contain valid positive integers');
+    }
+    return nums;
 }

@@ -4,6 +4,12 @@ import { DbService } from '../database/db.service';
 import { v4 as uuidv4 } from 'uuid';
 import { getISTDateString, getISTComponents, addISTMonths, addISTDays } from '../utils/date.util';
 import { IsString, IsNumber, IsOptional, IsBoolean, IsIn } from 'class-validator';
+import { VouchersService } from './vouchers.service';
+
+// Home state for CGST+SGST vs IGST — same convention Vouchers.tsx uses.
+const HOME_STATE = 'Assam';
+// Fixed line item every auto-created Tax Invoice bills against (confirmed choice).
+const AUTO_INVOICE_ITEM_NAME = 'Cloud Charges';
 
 // Helper to get days in a specific month
 const getDaysInMonth = (year: number, month: number): number => {
@@ -201,7 +207,7 @@ export class ActivitiesService {
   private recentRequests = new Map<string, number>();
   private readonly REQUEST_CACHE_TTL = 5000; // 5 seconds
 
-  constructor(private db: DbService) {
+  constructor(private db: DbService, private vouchersService: VouchersService) {
     // Cleanup expired requests every minute
     setInterval(() => this.cleanupRequestCache(), 60000);
   }
@@ -254,27 +260,34 @@ export class ActivitiesService {
   /** Pending (unbilled) activities for a customer — voucher_id IS NULL is
    *  the new authoritative check. Old rows without a voucher_id but with a
    *  voucher_no string are also treated as billed for safety. */
-  async findPendingByCustomer(customerId: string): Promise<any[]> {
+  async findPendingByCustomer(customerId: string, voucherId?: number): Promise<any[]> {
     await this.ensureVoucherNoColumn();
+    // When editing an existing voucher, also surface activities already
+    // linked to THAT voucher (not just unbilled ones) so the picker can
+    // show what's currently selected instead of hiding it as "billed".
     return this.db.query<any>(
       `SELECT ca.*, COALESCE(ca.customer_name, c.company) as customer_name
        FROM cloud_activities ca
        LEFT JOIN customer c ON ca.customer_id = c.id
        WHERE ca.customer_id = ?
-         AND ca.voucher_id IS NULL
-         AND (ca.voucher_no IS NULL OR ca.voucher_no = '')
+         AND (
+           (ca.voucher_id IS NULL AND (ca.voucher_no IS NULL OR ca.voucher_no = ''))
+           OR ca.voucher_id = ?
+         )
          AND ca.record_nature = 'Sales'
        ORDER BY ca.activity_date DESC`,
-      [customerId]
+      [customerId, voucherId ?? null]
     );
   }
 
   /** Pending (unbilled) purchase activities for a customer —
    *  Joins via sof_no: cloud_mappings -> cloud_servers.sof_no = cloud_activities.sof_no
    *  Falls back to Sales activities if no Purchase activities exist for the customer. */
-  async findPendingPurchaseByCustomer(customerId: string): Promise<any[]> {
+  async findPendingPurchaseByCustomer(customerId: string, voucherId?: number): Promise<any[]> {
     await this.ensureVoucherNoColumn();
-    // Try Purchase activities first via sof_no join
+    // Try Purchase activities first via sof_no join. As above, activities
+    // already linked to the voucher being edited are surfaced too so the
+    // picker reflects the current selection rather than hiding it.
     const purchaseRows = await this.db.query<any>(
       `SELECT ca.*
        FROM cloud_activities ca
@@ -282,11 +295,13 @@ export class ActivitiesService {
        JOIN cloud_mappings cm ON cm.server_id = cs.id
          AND cm.customer_id = ?
          AND cm.status = 'Active'
-       WHERE ca.voucher_id IS NULL
-         AND (ca.voucher_no IS NULL OR ca.voucher_no = '')
+       WHERE (
+           (ca.voucher_id IS NULL AND (ca.voucher_no IS NULL OR ca.voucher_no = ''))
+           OR ca.voucher_id = ?
+         )
          AND ca.record_nature = 'Purchase'
        ORDER BY ca.activity_date DESC`,
-      [customerId]
+      [customerId, voucherId ?? null]
     );
     if (purchaseRows.length > 0) return purchaseRows;
 
@@ -295,11 +310,13 @@ export class ActivitiesService {
       `SELECT ca.*
        FROM cloud_activities ca
        WHERE ca.customer_id = ?
-         AND ca.voucher_id IS NULL
-         AND (ca.voucher_no IS NULL OR ca.voucher_no = '')
+         AND (
+           (ca.voucher_id IS NULL AND (ca.voucher_no IS NULL OR ca.voucher_no = ''))
+           OR ca.voucher_id = ?
+         )
          AND ca.record_nature = 'Sales'
        ORDER BY ca.activity_date DESC`,
-      [customerId]
+      [customerId, voucherId ?? null]
     );
   }
 
@@ -335,6 +352,81 @@ export class ActivitiesService {
       [voucherId ?? null, voucherNo ?? null, ...activityIds]
     );
     return result.affectedRows || 0;
+  }
+
+  /** Auto-create a Sales → Tax Invoice voucher for a just-created Billing
+   *  Activity: one line of the fixed AUTO_INVOICE_ITEM_NAME item, qty 1,
+   *  rate = the activity's own bill_amount, using this type's own
+   *  auto-numbering (falls back to no number under manual numbering).
+   *  Returns null (never throws) if the Tax Invoice type or the fixed item
+   *  isn't set up — the caller logs that as a soft failure. */
+  private async autoCreateTaxInvoiceForActivity(activity: Activity): Promise<{ id: number; vch_no: string } | null> {
+    const vchType = await this.db.queryOne<{ id: number }>(
+      `SELECT id FROM vchtype WHERE LOWER(name) = 'tax invoice' LIMIT 1`,
+    );
+    if (!vchType) return null;
+
+    const item = await this.db.queryOne<{ id: number; gst: number }>(
+      `SELECT id, gst FROM items WHERE LOWER(item_name) = ? LIMIT 1`,
+      [AUTO_INVOICE_ITEM_NAME.toLowerCase()],
+    );
+    if (!item) return null;
+
+    const activityDate = (activity as any).activity_date
+      ? new Date((activity as any).activity_date).toISOString().split('T')[0]
+      : getISTDateString();
+
+    // Resolve customer's state the same way Vouchers.tsx does (direct
+    // state name, else pincode lookup) to decide CGST+SGST vs IGST.
+    let stateName = '';
+    const customer = await this.db.queryOne<{ state: string | null; pincode: string | null }>(
+      `SELECT state, pincode FROM customer WHERE id = ?`, [activity.customer_id],
+    );
+    if (customer?.state && isNaN(Number(customer.state))) {
+      stateName = customer.state;
+    } else if (customer?.pincode) {
+      const pin = await this.db.queryOne<{ state: string | null }>(
+        `SELECT s.name AS state FROM pincode p LEFT JOIN state s ON p.stateid = s.id WHERE p.pincode = ? LIMIT 1`,
+        [String(customer.pincode).replace(/\D/g, '')],
+      );
+      if (pin?.state) stateName = pin.state;
+    }
+    const isIgst = stateName ? stateName.toLowerCase() !== HOME_STATE.toLowerCase() : false;
+
+    const rate = +Number(activity.bill_amount).toFixed(2);
+    const gstRate = Number(item.gst) || 0;
+    const cgstAmount = isIgst ? 0 : +(rate * gstRate / 2 / 100).toFixed(2);
+    const sgstAmount = isIgst ? 0 : +(rate * gstRate / 2 / 100).toFixed(2);
+    const igstAmount = isIgst ? +(rate * gstRate / 100).toFixed(2) : 0;
+    const grandTotal = +(rate + cgstAmount + sgstAmount + igstAmount).toFixed(2);
+
+    const suggestedVchNo = await this.vouchersService.getNextVoucherNo(vchType.id, activityDate);
+
+    const created = await this.vouchersService.create({
+      vch_type_id: vchType.id,
+      vch_no: suggestedVchNo || undefined,
+      vch_date: activityDate,
+      party_ledger_id: Number(activity.customer_id),
+      is_igst: isIgst,
+      items: [{
+        item_id: item.id,
+        qty: 1,
+        rate,
+        amount: rate,
+        gst_rate: gstRate,
+        cgst_amount: cgstAmount,
+        sgst_amount: sgstAmount,
+        igst_amount: igstAmount,
+        batch_rows: null,
+      }],
+      ledgers: [],
+      // Same rule as the Quick Invoice modal: "New" only makes sense once a
+      // number actually got assigned; manual numbering with none assigned
+      // falls back to "On Account".
+      bill_allocation: [{ type: suggestedVchNo ? 'New' : 'On Account', refno: '', amount: grandTotal, direction: 'Dr' }],
+    } as any);
+
+    return { id: (created as any).id, vch_no: (created as any).vch_no };
   }
 
   async findAll(filters?: {
@@ -864,6 +956,33 @@ export class ActivitiesService {
 
     if (!resultActivity) {
       throw new Error('Failed to create activity: No valid activity nature specified');
+    }
+
+    // Auto-create the linked Tax Invoice voucher for a freshly-created Sales
+    // Billing Activity. Guarded by "not already billed" so re-saving a match
+    // (the existingMatch update path above) never double-invoices. Fail-soft:
+    // a problem here must not undo the activity that already saved — same
+    // philosophy as linkLeadAndAutoClose in vouchers.service.ts.
+    if (
+      resultActivity.record_nature === 'Sales' &&
+      resultActivity.bill_type === 'Tax Invoice' &&
+      Number(resultActivity.bill_amount) > 0 &&
+      resultActivity.customer_id &&
+      !(resultActivity as any).voucher_id &&
+      !(resultActivity as any).voucher_no
+    ) {
+      try {
+        const voucherInfo = await this.autoCreateTaxInvoiceForActivity(resultActivity);
+        if (voucherInfo) {
+          await this.markActivitiesBilled([resultActivity.id], { voucherId: voucherInfo.id, voucherNo: voucherInfo.vch_no });
+          (resultActivity as any).voucher_id = voucherInfo.id;
+          (resultActivity as any).voucher_no = voucherInfo.vch_no;
+          (resultActivity as any).auto_invoice_created = true;
+        }
+      } catch (e: any) {
+        console.error('[ActivitiesService] Auto-invoice creation failed:', e?.message || e);
+        (resultActivity as any).auto_invoice_error = e?.message || 'Failed to auto-create Tax Invoice';
+      }
     }
 
     // If splitting, we might want to sync both, but they share the same customer_id usually

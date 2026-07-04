@@ -1633,8 +1633,16 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
         await activitiesApi.update(editing.id, safeForm);
         showSuccess('Updated', 'Activity updated successfully');
       } else {
-        await activitiesApi.create(safeForm);
-        showSuccess('Added', 'Activity created successfully');
+        const res: any = await activitiesApi.create(safeForm);
+        const created = res?.data;
+        if (created?.auto_invoice_created) {
+          showSuccess('Added', `Activity created — Tax Invoice ${created.voucher_no || ''} auto-generated`.trim());
+        } else if (created?.auto_invoice_error) {
+          showSuccess('Added', 'Activity created, but the auto-invoice failed — bill it manually.');
+          showError('Auto-invoice failed', created.auto_invoice_error);
+        } else {
+          showSuccess('Added', 'Activity created successfully');
+        }
       }
       setShowModal(false);
       fetchActivities(); // Refresh list

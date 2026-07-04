@@ -42,6 +42,16 @@ export class TallyController {
         });
     }
 
+    /** Auto-called by the quick-invoice flow after a voucher is created for
+     *  a serial from the expiry report. This is the only path that sets the
+     *  Billed status — it requires a real voucher id, so the status can't be
+     *  set manually. */
+    @Post('mark-billed')
+    @RequireAnyPermission({ entity: 'expiry_renew_our', action: 'view' }, { entity: 'expiry_renew_not_our', action: 'view' })
+    async markBilled(@Body() body: { tallyserial: string; voucher_id: number }) {
+        return this.tallyService.markTallyBilled(body?.tallyserial, Number(body?.voucher_id));
+    }
+
     @Post('upsert-detail')
     async upsertTallyDetail(@Body() data: any, @Req() req: any) {
         const isAdmin = req.user?.role?.toLowerCase() === 'admin';

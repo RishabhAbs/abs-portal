@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, Search, X, Printer,
+  ChevronRight as DrillIcon, List, FolderTree, Tag,
 } from 'lucide-react';
 import { vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
@@ -39,6 +40,20 @@ type SortKey =
 type SortDir = 'asc' | 'desc';
 const PAGE_SIZES = [10, 25, 50, 100];
 const STORAGE_KEY = 'stock-summary-filters';
+
+type ViewMode = 'items' | 'groups' | 'categories';
+type BreadcrumbItem = { id: number; name: string };
+type GroupRow = {
+  row_type: 'group' | 'item';
+  id: number;
+  name: string;
+  item_count?: number | null;
+  opening_qty: number; opening_value: number;
+  inward_qty: number; inward_value: number;
+  outward_qty: number; outward_value: number;
+  closing_qty: number; closing_value: number;
+};
+const GROUP_PAGE_SIZE = 50;
 
 function fyBounds(d: Date) {
   const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
@@ -92,7 +107,7 @@ export default function StockSummary() {
     return () => window.removeEventListener('afterprint', onAfter);
   }, []);
   const handlePrint = () => {
-    if (rows.length === 0) return;
+    if ((viewMode === 'items' ? rows.length : groupRows.length) === 0) return;
     setPrinting(true);
     setTimeout(() => window.print(), 50);
   };
@@ -118,8 +133,90 @@ export default function StockSummary() {
     finally { setLoading(false); }
   }, [dateFrom, dateTo, debouncedSearch, showError]);
 
-  useEffect(() => { load(); }, [load]);
+  // ── Group drill-down mode (Tally-style: Group > Group > … > Item) ──
+  const [viewMode, setViewMode] = useState<ViewMode>('items');
+  const [breadcrumb, setBreadcrumb] = useState<BreadcrumbItem[]>([]);
+  const [groupRows, setGroupRows] = useState<GroupRow[]>([]);
+  const [groupTotals, setGroupTotals] = useState({ opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupPage, setGroupPage] = useState(1);
+  const currentGroupId = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1].id : null;
+
+  const loadGroups = useCallback(async () => {
+    setGroupLoading(true);
+    try {
+      const byCategory = viewMode === 'categories';
+      const summaryApi = byCategory ? vouchersApi.getStockCategorySummary : vouchersApi.getStockGroupSummary;
+      const itemsApiFn  = byCategory ? vouchersApi.getStockCategoryItems  : vouchersApi.getStockGroupItems;
+
+      if (currentGroupId === null) {
+        const res = await summaryApi({
+          date_from: dateFrom || undefined, date_to: dateTo || undefined, search: debouncedSearch || undefined,
+        });
+        if (res.success) {
+          setGroupRows((res.data.rows || []).map((g: any) => ({
+            row_type: 'group', id: g.group_id, name: g.group_name, item_count: g.item_count,
+            opening_qty: g.opening_qty, opening_value: g.opening_value,
+            inward_qty: g.inward_qty, inward_value: g.inward_value,
+            outward_qty: g.outward_qty, outward_value: g.outward_value,
+            closing_qty: g.closing_qty, closing_value: g.closing_value,
+          })));
+          setGroupTotals({
+            opening_value: res.data.totals?.opening_value || 0,
+            inward_value:  res.data.totals?.inward_value  || 0,
+            outward_value: res.data.totals?.outward_value || 0,
+            closing_value: res.data.totals?.closing_value || 0,
+          });
+        }
+      } else {
+        const res = await itemsApiFn(currentGroupId, {
+          date_from: dateFrom || undefined, date_to: dateTo || undefined, search: debouncedSearch || undefined,
+        });
+        if (res.success) {
+          setGroupRows((res.data.rows || []).map((r: any) => ({
+            row_type: r.row_type === 'subgroup' ? 'group' : 'item',
+            id: r.row_type === 'subgroup' ? r.group_id : r.item_id, name: r.item_name, item_count: r.item_count,
+            opening_qty: r.opening_qty, opening_value: r.opening_value,
+            inward_qty: r.inward_qty, inward_value: r.inward_value,
+            outward_qty: r.outward_qty, outward_value: r.outward_value,
+            closing_qty: r.closing_qty, closing_value: r.closing_value,
+          })));
+          setGroupTotals({
+            opening_value: res.data.totals?.opening_value || 0,
+            inward_value:  res.data.totals?.inward_value  || 0,
+            outward_value: res.data.totals?.outward_value || 0,
+            closing_value: res.data.totals?.closing_value || 0,
+          });
+        }
+      }
+    } catch { showError('Error', 'Failed to load Stock Summary groups'); }
+    finally { setGroupLoading(false); }
+  }, [viewMode, currentGroupId, dateFrom, dateTo, debouncedSearch, showError]);
+
+  useEffect(() => { if (viewMode === 'items') load(); }, [viewMode, load]);
+  useEffect(() => { if (viewMode === 'groups' || viewMode === 'categories') loadGroups(); }, [viewMode, loadGroups]);
   useEffect(() => { setPage(1); }, [debouncedSearch, dateFrom, dateTo, pageSize, sortKey, sortDir, hideZero]);
+  useEffect(() => { setGroupPage(1); }, [currentGroupId, debouncedSearch, dateFrom, dateTo, hideZero]);
+
+  const drillDown = (row: GroupRow) => {
+    if (row.row_type === 'group') { setBreadcrumb(prev => [...prev, { id: row.id, name: row.name }]); setSearch(''); }
+    else navigate(`/reports/stock-item?item_id=${row.id}`);
+  };
+  const openItemLedger = (itemId: number) => navigate(`/reports/stock-item?item_id=${itemId}`);
+  const goToBreadcrumb = (idx: number) => { setBreadcrumb(prev => idx < 0 ? [] : prev.slice(0, idx + 1)); setSearch(''); };
+
+  const groupFiltered = useMemo(() => {
+    if (!hideZero) return groupRows;
+    return groupRows.filter(r =>
+      Math.abs(r.opening_qty) > 0.0005 || Math.abs(r.inward_qty) > 0.0005
+      || Math.abs(r.outward_qty) > 0.0005 || Math.abs(r.closing_qty) > 0.0005,
+    );
+  }, [groupRows, hideZero]);
+  const groupTotalPages = Math.max(1, Math.ceil(groupFiltered.length / GROUP_PAGE_SIZE));
+  const groupSafePage = Math.min(groupPage, groupTotalPages);
+  const groupPageRows = printing ? groupFiltered : groupFiltered.slice((groupSafePage - 1) * GROUP_PAGE_SIZE, groupSafePage * GROUP_PAGE_SIZE);
+  const isGroupRoot = currentGroupId === null;
+  const groupNoun = viewMode === 'categories' ? 'categories' : 'groups';
 
   const filtered = useMemo(() => {
     if (!hideZero) return rows;
@@ -175,25 +272,58 @@ export default function StockSummary() {
 
       {/* ── Header bar ── */}
       <div className="flex-none bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between print:hidden">
-        <div className="flex items-center gap-1">
-          <button onClick={() => navigate(-1)} className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 -ml-1" title="Back">
+        <div className="flex items-center gap-1 min-w-0 flex-1">
+          <button
+            onClick={() => (viewMode !== 'items' && !isGroupRoot) ? goToBreadcrumb(breadcrumb.length - 2) : navigate(-1)}
+            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 -ml-1 flex-shrink-0" title="Back">
             <ChevronLeft size={20} />
           </button>
-          <h1 className="text-[17px] font-bold text-slate-800">Stock Summary</h1>
+          {viewMode === 'items' || breadcrumb.length === 0 ? (
+            <h1 className="text-[17px] font-bold text-slate-800 truncate">Stock Summary</h1>
+          ) : (
+            <div className="flex items-center gap-1 min-w-0 flex-wrap">
+              <button onClick={() => goToBreadcrumb(-1)} className="text-[14px] font-bold text-blue-600 hover:underline truncate">
+                Stock Summary
+              </button>
+              {breadcrumb.map((b, i) => (
+                <span key={b.id} className="flex items-center gap-1 min-w-0">
+                  <DrillIcon size={13} className="text-slate-400 flex-shrink-0" />
+                  <button onClick={() => goToBreadcrumb(i)}
+                    className={`text-[14px] font-semibold truncate max-w-[150px] ${i === breadcrumb.length - 1 ? 'text-slate-800' : 'text-blue-600 hover:underline'}`}>
+                    {b.name}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-stretch border border-slate-300 rounded-lg overflow-hidden mr-1">
+            <button onClick={() => setViewMode('items')} title="Flat item list"
+              className={`p-2 transition-colors ${viewMode === 'items' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100 bg-white'}`}>
+              <List size={16} />
+            </button>
+            <button onClick={() => { setViewMode('groups'); setBreadcrumb([]); }} title="By group (drill down)"
+              className={`p-2 transition-colors border-l border-slate-300 ${viewMode === 'groups' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100 bg-white'}`}>
+              <FolderTree size={16} />
+            </button>
+            <button onClick={() => { setViewMode('categories'); setBreadcrumb([]); }} title="By category (drill down)"
+              className={`p-2 transition-colors border-l border-slate-300 ${viewMode === 'categories' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100 bg-white'}`}>
+              <Tag size={16} />
+            </button>
+          </div>
           <button onClick={() => setShowControls(v => !v)}
             className={`p-2 rounded-lg transition-colors ${showControls ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
             title="Search & Filters">
             <Search size={18} />
           </button>
-          <button onClick={handlePrint} disabled={rows.length === 0}
+          <button onClick={handlePrint} disabled={(viewMode === 'items' ? rows.length : groupRows.length) === 0}
             className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-40"
             title="Print">
             <Printer size={16} />
           </button>
-          <button onClick={load} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100" title="Refresh">
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          <button onClick={() => viewMode === 'items' ? load() : loadGroups()} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100" title="Refresh">
+            <RefreshCw size={16} className={(viewMode === 'items' ? loading : groupLoading) ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
@@ -237,6 +367,7 @@ export default function StockSummary() {
 
 
       {/* ── Mobile flat list (hidden on sm+) ── */}
+      {viewMode === 'items' && (
       <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: "contain" }}>
         {loading ? (
           <div className="text-center text-gray-400 py-8 text-[13px]">Loading…</div>
@@ -245,7 +376,7 @@ export default function StockSummary() {
         ) : (
           <>
             {pageRows.map((r) => (
-              <div key={r.item_id} className="border-b border-gray-100 px-4 py-3">
+              <div key={r.item_id} onClick={() => openItemLedger(r.item_id)} className="border-b border-gray-100 px-4 py-3 active:bg-gray-50">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-gray-900 text-[14px] leading-snug">{r.item_name}</div>
@@ -268,8 +399,10 @@ export default function StockSummary() {
           </>
         )}
       </div>
+      )}
 
       {/* ── Desktop table (hidden on mobile) ── */}
+      {viewMode === 'items' && (
       <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3 print:mx-0 print:overflow-visible print:max-h-none print:border-slate-400">
         <table className="border-collapse text-[13px] w-full">
           <thead>
@@ -317,7 +450,7 @@ export default function StockSummary() {
                 const zebra = rowIdx % 2 === 1 ? 'bg-slate-50' : 'bg-white';
                 const negativeStock = r.closing_qty < -0.0005;
                 return (
-                  <tr key={r.item_id} className={`${zebra} hover:bg-blue-50`}>
+                  <tr key={r.item_id} onClick={() => openItemLedger(r.item_id)} className={`${zebra} hover:bg-blue-50 cursor-pointer`}>
                     <td className={`${cell} font-medium text-slate-800`}>{r.item_name}</td>
                     <td className={`${cell} text-slate-600 text-[12px]`}>{r.group_name || '—'}</td>
                     <td className={cellNum + ' text-slate-700'}>{r.opening_qty !== 0 ? fmtQty(r.opening_qty) : <span className="text-slate-300">—</span>}</td>
@@ -353,9 +486,127 @@ export default function StockSummary() {
           )}
         </table>
       </div>
+      )}
+
+      {/* ── Group mode: mobile card list ── */}
+      {viewMode !== 'items' && (
+      <div className="sm:hidden flex-1 min-h-0 overflow-auto bg-white" style={{ overscrollBehavior: 'contain' }}>
+        {groupLoading ? (
+          <div className="text-center text-gray-400 py-8 text-[13px]">Loading…</div>
+        ) : groupPageRows.length === 0 ? (
+          <div className="text-center text-gray-400 py-8 text-[13px]">No {isGroupRoot ? groupNoun : 'items'} match the current filter</div>
+        ) : groupPageRows.map((r) => {
+          const isGrp = r.row_type === 'group';
+          return (
+            <div key={`${r.row_type}-${r.id}`} onClick={() => drillDown(r)} className="border-b border-gray-100 px-4 py-3 active:bg-gray-50">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  {isGrp
+                    ? <DrillIcon size={14} className="text-blue-400 flex-shrink-0" />
+                    : <span className="w-3 h-3 rounded-full border border-slate-300 flex-shrink-0" />}
+                  <div className="min-w-0">
+                    <div className={`text-[14px] leading-snug truncate ${isGrp ? 'font-bold text-gray-900' : 'font-semibold text-gray-800'}`}>{r.name}</div>
+                    {isGrp && <div className="text-[11px] text-gray-400 mt-0.5">{r.item_count ?? 0} item(s)</div>}
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className={`text-[14px] font-bold tabular-nums ${r.closing_value < 0 ? 'text-red-600' : 'text-blue-700'}`}>₹{fmt(r.closing_value)}</div>
+                  <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">{fmtQty(r.closing_qty)} qty</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 mt-1.5 text-[11px] text-gray-400">
+                <span>Op: {fmtQty(r.opening_qty)}</span>
+                <span className="text-emerald-600">In: {fmtQty(r.inward_qty)}/{fmt(r.inward_value)}</span>
+                <span className="text-red-500">Out: {fmtQty(r.outward_qty)}/{fmt(r.outward_value)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      )}
+
+      {/* ── Group mode: desktop table ── */}
+      {viewMode !== 'items' && (
+      <div className="hidden sm:block flex-1 min-h-0 overflow-auto bg-white border-x border-b border-slate-300 mx-3 mb-3 print:mx-0 print:overflow-visible print:max-h-none print:border-slate-400">
+        <table className="border-collapse text-[13px] w-full">
+          <thead>
+            <tr>
+              <th className={`${headCell} text-left`} rowSpan={2}>{isGroupRoot ? (viewMode === 'categories' ? 'Category' : 'Group') : 'Particulars'}</th>
+              <th className={`${headCell} text-center`} colSpan={2}>Opening</th>
+              <th className={`${headCell} text-center`} colSpan={2}>Inward</th>
+              <th className={`${headCell} text-center`} colSpan={2}>Outward</th>
+              <th className={`${headCell} text-center`} colSpan={2}>Closing</th>
+            </tr>
+            <tr>
+              <th className={`${headCell} text-right w-24`}>Qty</th>
+              <th className={`${headCell} text-right w-28`}>Value</th>
+              <th className={`${headCell} text-right w-24`}>Qty</th>
+              <th className={`${headCell} text-right w-28`}>Value</th>
+              <th className={`${headCell} text-right w-24`}>Qty</th>
+              <th className={`${headCell} text-right w-28`}>Value</th>
+              <th className={`${headCell} text-right w-24`}>Qty</th>
+              <th className={`${headCell} text-right w-28`}>Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupLoading ? (
+              <tr><td colSpan={9} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
+            ) : groupPageRows.length === 0 ? (
+              <tr><td colSpan={9} className={`${cell} text-center text-slate-400 py-6`}>No {isGroupRoot ? groupNoun : 'items'} match the current filter</td></tr>
+            ) : groupPageRows.map((r, i) => {
+              const zebra = i % 2 === 1 ? 'bg-slate-50' : 'bg-white';
+              const isGrp = r.row_type === 'group';
+              const negativeStock = r.closing_qty < -0.0005;
+              return (
+                <tr key={`${r.row_type}-${r.id}`} onClick={() => drillDown(r)} className={`${zebra} hover:bg-blue-50 ${isGrp ? 'cursor-pointer' : ''}`}>
+                  <td className={`${cell} ${isGrp ? 'font-semibold text-slate-800' : 'text-slate-700'}`}>
+                    <div className="flex items-center gap-2">
+                      {isGrp
+                        ? <DrillIcon size={14} className="text-blue-400 flex-shrink-0" />
+                        : <span className="w-2 h-2 rounded-full border border-slate-300 flex-shrink-0" />}
+                      <span>{r.name}</span>
+                      {isGrp && <span className="text-[11px] text-slate-400">({r.item_count ?? 0})</span>}
+                    </div>
+                  </td>
+                  <td className={cellNum + ' text-slate-700'}>{r.opening_qty !== 0 ? fmtQty(r.opening_qty) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' text-slate-600'}>{r.opening_value !== 0 ? fmt(r.opening_value) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' text-emerald-700'}>{r.inward_qty > 0 ? fmtQty(r.inward_qty) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' text-emerald-600'}>{r.inward_value > 0 ? fmt(r.inward_value) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' text-red-700'}>{r.outward_qty > 0 ? fmtQty(r.outward_qty) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' text-red-600'}>{r.outward_value > 0 ? fmt(r.outward_value) : <span className="text-slate-300">—</span>}</td>
+                  <td className={cellNum + ' font-semibold ' + (negativeStock ? 'text-red-700' : 'text-blue-700')}>
+                    {r.closing_qty !== 0 ? fmtQty(r.closing_qty) : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className={cellNum + ' font-semibold ' + (negativeStock ? 'text-red-700' : 'text-blue-700')}>
+                    {r.closing_value !== 0 ? fmt(r.closing_value) : <span className="text-slate-300">—</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          {groupFiltered.length > 0 && (
+            <tfoot>
+              <tr className="bg-slate-200 font-bold sticky bottom-0">
+                <td className={`${cell} text-slate-700`}>
+                  {isGroupRoot ? `Total (${groupFiltered.length} ${groupNoun})` : `Total (${groupFiltered.filter(r => r.row_type === 'group').length} sub-${groupNoun}, ${groupFiltered.filter(r => r.row_type === 'item').length} items)`}
+                </td>
+                <td className={cell} />
+                <td className={cellNum + ' text-slate-700'}>{fmt(groupTotals.opening_value)}</td>
+                <td className={cell} />
+                <td className={cellNum + ' text-emerald-700'}>{fmt(groupTotals.inward_value)}</td>
+                <td className={cell} />
+                <td className={cellNum + ' text-red-700'}>{fmt(groupTotals.outward_value)}</td>
+                <td className={cell} />
+                <td className={cellNum + ' text-blue-700'}>{fmt(groupTotals.closing_value)}</td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+      )}
 
       {/* Mobile — Grand Total fixed above pagination */}
-      {!printing && totalRows > 0 && (
+      {viewMode === 'items' && !printing && totalRows > 0 && (
         <div className="sm:hidden flex-none border-t border-gray-200 print:hidden">
           <div className="bg-blue-700 text-white px-4 py-2.5 flex justify-between items-center">
             <span className="font-bold text-sm tracking-widest">GRAND TOTAL</span>
@@ -382,8 +633,38 @@ export default function StockSummary() {
         </div>
       )}
 
+      {/* Group mode — Grand Total fixed above pagination (mobile) */}
+      {viewMode !== 'items' && !printing && groupFiltered.length > 0 && (
+        <div className="sm:hidden flex-none border-t border-gray-200 print:hidden">
+          <div className="bg-blue-700 text-white px-4 py-2.5 flex justify-between items-center">
+            <span className="font-bold text-sm tracking-widest">GRAND TOTAL</span>
+            <span className="text-sm tabular-nums font-semibold">
+              {isGroupRoot ? `${groupFiltered.length} ${groupNoun}` : `${groupFiltered.length} rows`}
+            </span>
+          </div>
+          <div className="flex divide-x divide-gray-200 bg-white">
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] uppercase text-gray-400 font-bold tracking-wide">Opening</div>
+              <div className="text-[13px] font-bold text-slate-700 tabular-nums mt-0.5">₹{fmt(groupTotals.opening_value)}</div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] uppercase text-gray-400 font-bold tracking-wide">Inward</div>
+              <div className="text-[13px] font-bold text-emerald-700 tabular-nums mt-0.5">₹{fmt(groupTotals.inward_value)}</div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] uppercase text-gray-400 font-bold tracking-wide">Outward</div>
+              <div className="text-[13px] font-bold text-red-600 tabular-nums mt-0.5">₹{fmt(groupTotals.outward_value)}</div>
+            </div>
+            <div className="flex-1 px-3 py-2.5">
+              <div className="text-[10px] uppercase text-gray-400 font-bold tracking-wide">Closing</div>
+              <div className="text-[13px] font-bold text-blue-700 tabular-nums mt-0.5">₹{fmt(groupTotals.closing_value)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Pagination — flex-none keeps it at bottom */}
-      {!printing && totalRows > pageSize && (
+      {viewMode === 'items' && !printing && totalRows > pageSize && (
         <div className="flex-none flex items-center justify-between gap-2 px-3 py-1.5 border-t border-slate-200 bg-slate-50 text-[13px] text-slate-700 print:hidden">
           <div className="flex items-center gap-2">
             <span className="hidden sm:inline">Rows per page:</span>
@@ -399,6 +680,20 @@ export default function StockSummary() {
             <span className="px-2 tabular-nums">Page {safePage} / {totalPages}</span>
             <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronRight size={14} /></button>
             <button onClick={() => setPage(totalPages)} disabled={safePage === totalPages} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronsRight size={14} /></button>
+          </div>
+        </div>
+      )}
+
+      {/* Group mode — pagination */}
+      {viewMode !== 'items' && !printing && groupFiltered.length > GROUP_PAGE_SIZE && (
+        <div className="flex-none flex items-center justify-between gap-2 px-3 py-1.5 border-t border-slate-200 bg-slate-50 text-[13px] text-slate-700 print:hidden">
+          <div className="tabular-nums">{`${(groupSafePage - 1) * GROUP_PAGE_SIZE + 1}–${Math.min(groupSafePage * GROUP_PAGE_SIZE, groupFiltered.length)} of ${groupFiltered.length}`}</div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setGroupPage(1)} disabled={groupSafePage === 1} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronsLeft size={14} /></button>
+            <button onClick={() => setGroupPage(p => Math.max(1, p - 1))} disabled={groupSafePage === 1} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronLeft size={14} /></button>
+            <span className="px-2 tabular-nums">Page {groupSafePage} / {groupTotalPages}</span>
+            <button onClick={() => setGroupPage(p => Math.min(groupTotalPages, p + 1))} disabled={groupSafePage === groupTotalPages} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronRight size={14} /></button>
+            <button onClick={() => setGroupPage(groupTotalPages)} disabled={groupSafePage === groupTotalPages} className="p-1 border border-slate-300 rounded bg-white hover:bg-slate-50 disabled:opacity-40"><ChevronsRight size={14} /></button>
           </div>
         </div>
       )}

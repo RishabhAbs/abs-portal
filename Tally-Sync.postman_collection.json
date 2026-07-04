@@ -1,102 +1,504 @@
 {
   "info": {
-    "name": "ABS Tally Sync API",
-    "description": "Poll-and-acknowledge voucher sync between ABS Cloud and Tally.\n\nFlow:\n1. Tally calls GET /api/tally-sync/vouchers to pull unsynced vouchers.\n2. Tally imports them locally.\n3. Tally calls POST /api/tally-sync/acknowledge with the imported voucher IDs.\n4. Those vouchers are stamped tally_synced_at and excluded from future GET polls.\n\nAuth: every request needs header `x-tally-key: {{tally_key}}`. Default key is `abs-tally-2024` unless TALLY_SYNC_KEY is set in the backend .env.",
+    "name": "ABS ↔ Tally Voucher Sync",
+    "description": "Poll-and-acknowledge sync between ABS Cloud and Tally — masters (ledgers, items) and vouchers.\n\n---\n\n## Import order\n\nRun masters **before** vouchers, so every `<LEDGER>` / `<STOCKITEM>` a voucher references already exists in Tally:\n\n1. **Ledgers** — `GET /ledgers` → import → `POST /ledgers/acknowledge`\n2. **Items** — `GET /items` → import → `POST /items/acknowledge`\n3. **Vouchers** — `GET /vouchers` → import → `POST /acknowledge`\n\n## The poll-and-acknowledge contract (same for all three)\n\n1. **Pull** — GET returns rows not yet imported (`tally_synced_at IS NULL`), oldest first, paginated.\n2. **Import** — Tally converts each JSON row into its native XML and imports it locally.\n3. **Acknowledge** — POST back only the IDs that imported successfully. They are stamped `tally_synced_at` and drop out of future pulls.\n4. Failed IDs are simply *not* acknowledged, so they re-appear on the next poll — nothing is ever lost. Acknowledge is idempotent.\n\nAdd `include_all=1` to any GET to also return already-acknowledged rows (re-import / audit).\n\n## Auth\n\nEvery request needs the header `x-tally-key`. It is applied automatically at collection level from the `tally_key` variable.\n\nDefault key: `abs-tally-2024` — override by setting `TALLY_SYNC_KEY` in the backend `.env`.\n\n## Variables\n\n| Variable | Default | Purpose |\n|---|---|---|\n| `base_url` | `http://localhost:5000` | Backend origin |\n| `tally_key` | `abs-tally-2024` | Value for the `x-tally-key` header |\n| `voucher_ids` / `item_ids` / `ledger_ids` | *(auto)* | Filled by each Pull request's test script; consumed by its Acknowledge |",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_postman_id": "abs-tally-sync-collection"
   },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-tally-key", "type": "string" },
+      { "key": "value", "value": "{{tally_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
   "variable": [
     { "key": "base_url", "value": "http://localhost:5000" },
-    { "key": "tally_key", "value": "abs-tally-2024" }
+    { "key": "tally_key", "value": "abs-tally-2024" },
+    { "key": "voucher_ids", "value": "[]" },
+    { "key": "item_ids", "value": "[]" },
+    { "key": "ledger_ids", "value": "[]" }
   ],
   "item": [
     {
-      "name": "Get Unsynced Vouchers",
-      "request": {
-        "method": "GET",
-        "header": [
-          { "key": "x-tally-key", "value": "{{tally_key}}" }
-        ],
-        "url": {
-          "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
-          "host": ["{{base_url}}"],
-          "path": ["api", "tally-sync", "vouchers"],
-          "query": [
-            { "key": "page", "value": "1" },
-            { "key": "limit", "value": "100" },
-            { "key": "date_from", "value": "2026-04-01", "disabled": true },
-            { "key": "date_to", "value": "2026-06-30", "disabled": true },
-            { "key": "vch_type", "value": "Sales", "disabled": true },
-            { "key": "include_all", "value": "1", "disabled": true }
+      "name": "1 · Masters — Ledgers",
+      "description": "Ledger masters — one row per customer record (this app's ledger master; voucher `party_name` and every `ledger_entries` row reference it). Import these FIRST.",
+      "item": [
+        {
+          "name": "Pull unsynced ledgers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success is true', () => pm.expect(body.success).to.be.true);",
+                  "",
+                  "const ids = (body.ledgers || []).map(l => l.id);",
+                  "pm.collectionVariables.set('ledger_ids', JSON.stringify(ids));",
+                  "console.log(`Pulled ${ids.length} ledger(s) of ${body.total} pending — ids saved to {{ledger_ids}}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/ledgers?page=1&limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "ledgers"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Default 1" },
+                { "key": "limit", "value": "100", "description": "Default 100, max 500" },
+                { "key": "include_all", "value": "1", "description": "1 = also return already-acknowledged ledgers", "disabled": true }
+              ]
+            },
+            "description": "Returns ledgers where `tally_synced_at IS NULL`. Each row carries everything a Tally `<LEDGER>` master needs: name, group, GSTIN, full address with resolved state, contact, opening balance (+ Dr/Cr) and the bill-by-bill flag. The test script saves the returned IDs into `{{ledger_ids}}`."
+          },
+          "response": [
+            {
+              "name": "200 — pending ledgers",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/ledgers?page=1&limit=100",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "ledgers"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "100" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"total\": 8894,\n  \"page\": 1,\n  \"limit\": 100,\n  \"ledgers\": [\n    {\n      \"id\": 95,\n      \"ledger_name\": \"AJAY KR MAJHI\",\n      \"ledger_group\": \"Sundry Debtors\",\n      \"gstin\": null,\n      \"address\": {\n        \"address1\": \"Red cross road, graham bazar\",\n        \"address2\": null,\n        \"address3\": \"Dibrugarh\",\n        \"city\": \"Dibrugarh\",\n        \"state\": \"Assam\",\n        \"pincode\": \"786001\"\n      },\n      \"contact_person\": \"Ajay\",\n      \"mobile\": \"9101810600\",\n      \"email\": \"kumar.ajay9004@gmail.com\",\n      \"opening_balance\": 0,\n      \"opening_balance_type\": null,\n      \"bill_by_bill\": true,\n      \"active\": true,\n      \"created_at\": null,\n      \"tally_synced_at\": null\n    }\n  ]\n}"
+            }
           ]
         },
-        "description": "Pulls vouchers where tally_synced_at IS NULL (default). Add include_all=1 to also fetch already-synced vouchers (re-import / audit). Filter by date_from, date_to, vch_type (Sales | Purchase | Payment | Receipt | Journal | Contra). Max limit is 500."
-      },
-      "response": []
+        {
+          "name": "Acknowledge imported ledgers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log(`Acknowledged ${body.acknowledged} ledger(s)`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": {{ledger_ids}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/ledgers/acknowledge",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "ledgers", "acknowledge"]
+            },
+            "description": "Stamps `tally_synced_at` on each ledger ID. Body defaults to `{{ledger_ids}}` (auto-filled by *Pull unsynced ledgers*). Idempotent — already-acknowledged IDs are skipped."
+          },
+          "response": [
+            {
+              "name": "200 — batch acknowledged",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "x-tally-key", "value": "{{tally_key}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"ids\": [95, 96, 97]\n}" },
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/ledgers/acknowledge",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "ledgers", "acknowledge"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"acknowledged\": 3\n}"
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "Get All Vouchers (include_all)",
-      "request": {
-        "method": "GET",
-        "header": [
-          { "key": "x-tally-key", "value": "{{tally_key}}" }
-        ],
-        "url": {
-          "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100&include_all=1",
-          "host": ["{{base_url}}"],
-          "path": ["api", "tally-sync", "vouchers"],
-          "query": [
-            { "key": "page", "value": "1" },
-            { "key": "limit", "value": "100" },
-            { "key": "include_all", "value": "1" }
+      "name": "2 · Masters — Items",
+      "description": "Stock item masters. Import these SECOND — before vouchers — so every `<STOCKITEM>` a voucher's inventory line references already exists.",
+      "item": [
+        {
+          "name": "Pull unsynced items",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success is true', () => pm.expect(body.success).to.be.true);",
+                  "",
+                  "const ids = (body.items || []).map(i => i.id);",
+                  "pm.collectionVariables.set('item_ids', JSON.stringify(ids));",
+                  "console.log(`Pulled ${ids.length} item(s) of ${body.total} pending — ids saved to {{item_ids}}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/items?page=1&limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "items"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Default 1" },
+                { "key": "limit", "value": "100", "description": "Default 100, max 500" },
+                { "key": "include_all", "value": "1", "description": "1 = also return already-acknowledged items", "disabled": true }
+              ]
+            },
+            "description": "Returns items where `tally_synced_at IS NULL`. Each row carries name, group, category, Tally flavour, GST rate, HSN, `batch_tracked` (true = maintain batches/serials in Tally) and opening qty/rate/value. The test script saves the returned IDs into `{{item_ids}}`."
+          },
+          "response": [
+            {
+              "name": "200 — pending items",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/items?page=1&limit=100",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "items"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "100" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"total\": 35,\n  \"page\": 1,\n  \"limit\": 100,\n  \"items\": [\n    {\n      \"id\": 2,\n      \"item_name\": \"TallyPrime Silver\",\n      \"item_group\": \"Tally\",\n      \"category\": \"NEW\",\n      \"tally_flavour\": \"Silver\",\n      \"batch_tracked\": true,\n      \"gst_rate\": 18,\n      \"hsn\": \"85238020\",\n      \"opening_qty\": 0,\n      \"opening_rate\": 0,\n      \"opening_value\": 0,\n      \"created_at\": \"2026-04-14 22:45:23\",\n      \"updated_at\": \"2026-04-24 13:15:34\",\n      \"tally_synced_at\": null\n    },\n    {\n      \"id\": 26,\n      \"item_name\": \"Cloud Charges\",\n      \"item_group\": \"Services\",\n      \"category\": \"CLOUD\",\n      \"tally_flavour\": null,\n      \"batch_tracked\": false,\n      \"gst_rate\": 18,\n      \"hsn\": \"998315\",\n      \"opening_qty\": 0,\n      \"opening_rate\": 0,\n      \"opening_value\": 0,\n      \"created_at\": \"2026-04-20 10:02:11\",\n      \"updated_at\": \"2026-05-02 16:44:09\",\n      \"tally_synced_at\": null\n    }\n  ]\n}"
+            }
           ]
         },
-        "description": "Same as Get Unsynced Vouchers but includes vouchers that were already acknowledged. Useful for re-import or auditing the full export."
-      },
-      "response": []
+        {
+          "name": "Acknowledge imported items",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log(`Acknowledged ${body.acknowledged} item(s)`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": {{item_ids}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/items/acknowledge",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "items", "acknowledge"]
+            },
+            "description": "Stamps `tally_synced_at` on each item ID. Body defaults to `{{item_ids}}` (auto-filled by *Pull unsynced items*). Idempotent — already-acknowledged IDs are skipped."
+          },
+          "response": [
+            {
+              "name": "200 — batch acknowledged",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "x-tally-key", "value": "{{tally_key}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"ids\": [2, 3, 26]\n}" },
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/items/acknowledge",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "items", "acknowledge"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"acknowledged\": 3\n}"
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "Get Vouchers By Date Range",
-      "request": {
-        "method": "GET",
-        "header": [
-          { "key": "x-tally-key", "value": "{{tally_key}}" }
-        ],
-        "url": {
-          "raw": "{{base_url}}/api/tally-sync/vouchers?date_from=2026-04-01&date_to=2026-06-30&page=1&limit=200",
-          "host": ["{{base_url}}"],
-          "path": ["api", "tally-sync", "vouchers"],
-          "query": [
-            { "key": "date_from", "value": "2026-04-01" },
-            { "key": "date_to", "value": "2026-06-30" },
-            { "key": "page", "value": "1" },
-            { "key": "limit", "value": "200" }
+      "name": "3 · Vouchers — Pull",
+      "description": "Fetch vouchers waiting to be imported into Tally. Run AFTER masters so referenced ledgers/items exist.",
+      "item": [
+        {
+          "name": "Pull unsynced vouchers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success is true', () => pm.expect(body.success).to.be.true);",
+                  "",
+                  "// Stash the pulled IDs so '2 · Acknowledge' can send them back in one click.",
+                  "const ids = (body.vouchers || []).map(v => v.id);",
+                  "pm.collectionVariables.set('voucher_ids', JSON.stringify(ids));",
+                  "console.log(`Pulled ${ids.length} voucher(s) of ${body.total} pending — ids saved to {{voucher_ids}}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "vouchers"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Default 1" },
+                { "key": "limit", "value": "100", "description": "Default 100, max 500" },
+                { "key": "date_from", "value": "2026-04-01", "description": "YYYY-MM-DD — vouchers on/after this date", "disabled": true },
+                { "key": "date_to", "value": "2026-06-30", "description": "YYYY-MM-DD — vouchers on/before this date", "disabled": true },
+                { "key": "vch_type", "value": "Sales", "description": "Sales | Purchase | Payment | Receipt | Journal | Contra (matches parent type)", "disabled": true },
+                { "key": "include_all", "value": "1", "description": "1 = also return already-acknowledged vouchers", "disabled": true }
+              ]
+            },
+            "description": "Returns vouchers where `tally_synced_at IS NULL`, oldest first.\n\nEnable the disabled query params to filter. The test script saves the returned IDs into `{{voucher_ids}}` for the Acknowledge request."
+          },
+          "response": [
+            {
+              "name": "200 — one pending Sales voucher",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "vouchers"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "100" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"total\": 1,\n  \"page\": 1,\n  \"limit\": 100,\n  \"vouchers\": [\n    {\n      \"id\": 2304,\n      \"vch_no\": \"lala/0000940/nana\",\n      \"vch_date\": \"2026-07-04\",\n      \"vch_type\": \"Sales\",\n      \"vch_subtype\": \"Tax Invoice\",\n      \"party_name\": \"Sagar Steel\",\n      \"party_gstin\": \"18ABCDE1234F1Z5\",\n      \"party_address\": {\n        \"address1\": \"Main Road\",\n        \"address2\": null,\n        \"city\": \"Guwahati\",\n        \"state\": \"Assam\",\n        \"pincode\": \"781001\"\n      },\n      \"amount\": 376420.00,\n      \"remark\": null,\n      \"created_at\": \"2026-07-04T11:32:08.000Z\",\n      \"tally_synced_at\": null,\n      \"ledger_entries\": [\n        {\n          \"ledger_name\": \"Sagar Steel\",\n          \"ledger_group\": \"Sundry Debtors\",\n          \"amount\": 376420.00,\n          \"direction\": \"Dr\",\n          \"inventory\": [],\n          \"bill_allocations\": [\n            { \"billname\": \"lala/0000940/nana\", \"amount\": 376420.00, \"direction\": \"Dr\" }\n          ]\n        },\n        {\n          \"ledger_name\": \"Sales\",\n          \"ledger_group\": \"Sales Accounts\",\n          \"amount\": 319000.00,\n          \"direction\": \"Cr\",\n          \"inventory\": [\n            {\n              \"item_name\": \"Cloud Charges\",\n              \"item_group\": \"Services\",\n              \"hsn\": \"998315\",\n              \"qty\": 1.000,\n              \"rate\": 319000.00,\n              \"amount\": 319000.00,\n              \"gst_rate\": 18.00,\n              \"batches\": []\n            }\n          ],\n          \"bill_allocations\": []\n        },\n        {\n          \"ledger_name\": \"CGST\",\n          \"ledger_group\": \"Duties & Taxes\",\n          \"amount\": 28710.00,\n          \"direction\": \"Cr\",\n          \"inventory\": [],\n          \"bill_allocations\": []\n        },\n        {\n          \"ledger_name\": \"SGST\",\n          \"ledger_group\": \"Duties & Taxes\",\n          \"amount\": 28710.00,\n          \"direction\": \"Cr\",\n          \"inventory\": [],\n          \"bill_allocations\": []\n        }\n      ]\n    }\n  ]\n}"
+            },
+            {
+              "name": "200 — queue empty (all acknowledged)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "x-tally-key", "value": "{{tally_key}}" }],
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/vouchers?page=1&limit=100",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "vouchers"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "100" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"total\": 0,\n  \"page\": 1,\n  \"limit\": 100,\n  \"vouchers\": []\n}"
+            },
+            {
+              "name": "401 — bad or missing x-tally-key",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "x-tally-key", "value": "wrong-key" }],
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/vouchers",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "vouchers"]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"message\": \"Invalid or missing x-tally-key header\",\n  \"error\": \"Unauthorized\",\n  \"statusCode\": 401\n}"
+            }
           ]
         },
-        "description": "Filters unsynced vouchers to a specific date window."
-      },
-      "response": []
+        {
+          "name": "Pull by date range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?date_from=2026-04-01&date_to=2026-06-30&page=1&limit=200",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "vouchers"],
+              "query": [
+                { "key": "date_from", "value": "2026-04-01" },
+                { "key": "date_to", "value": "2026-06-30" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "200" }
+              ]
+            },
+            "description": "Unsynced vouchers restricted to an FY quarter (or any window). Dates filter on `vch_date`."
+          },
+          "response": []
+        },
+        {
+          "name": "Pull by voucher type",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?vch_type=Sales&page=1&limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "vouchers"],
+              "query": [
+                { "key": "vch_type", "value": "Sales", "description": "Sales | Purchase | Payment | Receipt | Journal | Contra" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "100" }
+              ]
+            },
+            "description": "Filters on the *parent* voucher type — e.g. `vch_type=Sales` also matches custom sub-types like Tax Invoice."
+          },
+          "response": []
+        },
+        {
+          "name": "Re-pull everything (audit)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/vouchers?include_all=1&page=1&limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "vouchers"],
+              "query": [
+                { "key": "include_all", "value": "1" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "100" }
+              ]
+            },
+            "description": "Ignores the `tally_synced_at` filter — returns acknowledged vouchers too (each carries its `tally_synced_at` timestamp). Use for re-import after a Tally data loss, or to audit what was exported."
+          },
+          "response": []
+        }
+      ]
     },
     {
-      "name": "Acknowledge Synced Vouchers",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "x-tally-key", "value": "{{tally_key}}" },
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"ids\": [1, 2, 3]\n}"
-        },
-        "url": {
-          "raw": "{{base_url}}/api/tally-sync/acknowledge",
-          "host": ["{{base_url}}"],
-          "path": ["api", "tally-sync", "acknowledge"]
-        },
-        "description": "Call this after Tally has successfully imported a batch of vouchers. Stamps tally_synced_at = NOW() on each ID so they're excluded from future GET polls. Idempotent — already-acknowledged IDs are silently skipped, response.acknowledged reflects only newly-stamped rows."
-      },
-      "response": []
+      "name": "4 · Vouchers — Acknowledge",
+      "description": "Confirm which vouchers Tally imported successfully.",
+      "item": [
+        {
+          "name": "Acknowledge imported vouchers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success is true', () => pm.expect(body.success).to.be.true);",
+                  "console.log(`Acknowledged ${body.acknowledged} voucher(s)`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": {{voucher_ids}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tally-sync/acknowledge",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tally-sync", "acknowledge"]
+            },
+            "description": "Stamps `tally_synced_at = NOW()` on each ID so it drops out of future pulls.\n\nThe body defaults to `{{voucher_ids}}` — auto-filled by the *Pull unsynced vouchers* test script — so running Pull → Acknowledge back-to-back completes a full sync cycle. Replace with an explicit array (e.g. `[1, 2, 3]`) to acknowledge manually.\n\n**Idempotent**: already-acknowledged IDs are skipped silently; `acknowledged` in the response counts only newly-stamped rows. Only acknowledge IDs that actually imported — anything you leave out is re-served on the next pull."
+          },
+          "response": [
+            {
+              "name": "200 — batch acknowledged",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "x-tally-key", "value": "{{tally_key}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"ids\": [2304, 2305, 2306]\n}" },
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/acknowledge",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "acknowledge"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"success\": true,\n  \"acknowledged\": 3\n}"
+            },
+            {
+              "name": "400 — empty or invalid ids",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  { "key": "x-tally-key", "value": "{{tally_key}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"ids\": []\n}" },
+                "url": {
+                  "raw": "{{base_url}}/api/tally-sync/acknowledge",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "tally-sync", "acknowledge"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+              "body": "{\n  \"message\": \"ids must be a non-empty array of voucher IDs\",\n  \"error\": \"Bad Request\",\n  \"statusCode\": 400\n}"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OtherLedgerService } from '../services/other-ledger.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
@@ -13,10 +13,10 @@ export class OtherLedgerController {
     constructor(private otherLedgerService: OtherLedgerService) {}
 
     @Get()
-    @ApiOperation({ summary: 'Get all other ledgers' })
+    @ApiOperation({ summary: 'Get all other ledgers (scoped to the user\'s ledger group when one is assigned)' })
     @RequirePermission('other_ledgers', 'view')
-    async findAll() {
-        const data = await this.otherLedgerService.findAll();
+    async findAll(@Req() req: any) {
+        const data = await this.otherLedgerService.findAll(req.user);
         return { success: true, data };
     }
 

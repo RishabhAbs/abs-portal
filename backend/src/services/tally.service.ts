@@ -63,14 +63,30 @@ export class TallyService implements OnModuleInit {
                 )
             `);
 
-            // Add tally_synced_at to vch_details for poll-and-acknowledge sync with Tally
-            const vchColCheck = await this.db.query<any>(
+            // Billed marker on tallydetails — set ONLY by the quick-invoice
+            // flow (markTallyBilled), never via the manual status dropdown.
+            const billedColCheck = await this.db.query<any>(
                 `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vch_details' AND COLUMN_NAME = 'tally_synced_at'`
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tallydetails' AND COLUMN_NAME = 'billed_voucher_id'`
             ).catch(() => []);
-            if ((vchColCheck[0]?.cnt ?? 0) === 0) {
-                await this.db.execute(`ALTER TABLE vch_details ADD COLUMN tally_synced_at DATETIME DEFAULT NULL`).catch(() => {});
-                await this.db.execute(`ALTER TABLE vch_details ADD INDEX idx_tally_sync (tally_synced_at)`).catch(() => {});
+            if ((billedColCheck[0]?.cnt ?? 0) === 0) {
+                await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN billed_voucher_id INT DEFAULT NULL`).catch(() => {});
+                await this.db.execute(`ALTER TABLE tallydetails ADD COLUMN billed_at DATETIME DEFAULT NULL`).catch(() => {});
+                await this.db.execute(`ALTER TABLE tallydetails ADD INDEX idx_billed_voucher (billed_voucher_id)`).catch(() => {});
+            }
+
+            // Add tally_synced_at to vch_details, items and customer for
+            // poll-and-acknowledge sync with Tally (vouchers + masters).
+            for (const table of ['vch_details', 'items', 'customer']) {
+                const colCheck = await this.db.query<any>(
+                    `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'tally_synced_at'`,
+                    [table],
+                ).catch(() => []);
+                if ((colCheck[0]?.cnt ?? 0) === 0) {
+                    await this.db.execute(`ALTER TABLE ${table} ADD COLUMN tally_synced_at DATETIME DEFAULT NULL`).catch(() => {});
+                    await this.db.execute(`ALTER TABLE ${table} ADD INDEX idx_tally_sync (tally_synced_at)`).catch(() => {});
+                }
             }
 
         } catch (error) {
@@ -254,10 +270,15 @@ export class TallyService implements OnModuleInit {
             baseParams.push(date_to);
         }
 
-        // Status-specific where clause
+        // Status-specific where clause. 'Billed' is NOT a singlemaster
+        // status — it's the auto-set marker stamped when a voucher is
+        // created from this report (billed_voucher_id), so it filters on
+        // that column instead of esm.name.
         let statusWhere = '';
         const statusParams: any[] = [];
-        if (expiry_status && expiry_status !== 'All') {
+        if (expiry_status === 'Billed') {
+            statusWhere = ' AND td.billed_voucher_id IS NOT NULL';
+        } else if (expiry_status && expiry_status !== 'All') {
             statusWhere = ' AND esm.name = ?';
             statusParams.push(expiry_status);
         }
@@ -306,7 +327,8 @@ export class TallyService implements OnModuleInit {
                 sm.name as flavor_name,
                 esm.name as expiry_status_name,
                 COALESCE(cu.name, a.name) as staff_name,
-                r.name as reseller_name
+                r.name as reseller_name,
+                vb.vch_no as billed_vch_no
             FROM tallydetails td
             JOIN customer c ON td.customerid = c.id
             LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR)
@@ -314,6 +336,7 @@ export class TallyService implements OnModuleInit {
             LEFT JOIN cloud_users cu ON c.cloud_group_id = cu.id
             LEFT JOIN admin a ON c.group = CAST(a.id AS CHAR)
             LEFT JOIN reseller r ON c.resellerid = r.id
+            LEFT JOIN vch_details vb ON vb.id = td.billed_voucher_id
             ${baseWhere} ${statusWhere}
             ORDER BY td.tallyexpirydate ASC
             LIMIT ? OFFSET ?
@@ -334,6 +357,17 @@ export class TallyService implements OnModuleInit {
         `;
         const statusCounts = await this.db.query(statusCountsQuery, baseParams);
 
+        // Billed count (independent of the manual-status buckets above)
+        const billedCountRow = await this.db.queryOne<{ total: number }>(
+            `SELECT COUNT(*) as total
+             FROM tallydetails td
+             JOIN customer c ON td.customerid = c.id
+             LEFT JOIN cloud_users cu ON c.cloud_group_id = cu.id
+             LEFT JOIN admin a ON c.group = CAST(a.id AS CHAR)
+             ${baseWhere} AND td.billed_voucher_id IS NOT NULL`,
+            baseParams,
+        ).catch(() => null);
+
         return {
             data: data.map(row => ({
                 ...row,
@@ -341,13 +375,38 @@ export class TallyService implements OnModuleInit {
             })),
             total: totalResult?.total || 0,
             allCount: allCountResult?.total || 0,
-            statusCounts: statusCounts.reduce((acc, curr) => {
-                acc[curr.status_name || 'Pending'] = curr.count;
-                return acc;
-            }, {}),
+            statusCounts: {
+                ...statusCounts.reduce((acc, curr) => {
+                    acc[curr.status_name || 'Pending'] = curr.count;
+                    return acc;
+                }, {}),
+                Billed: Number(billedCountRow?.total) || 0,
+            },
             page,
             limit
         };
+    }
+
+    /** Stamp a tallydetails row as billed — the ONLY way a serial becomes
+     *  "Billed" in the expiry report. Called by the quick-invoice flow right
+     *  after the voucher saves; the manual renewal-call status dropdown has
+     *  no Billed option, and updateExpiryCall never touches these columns.
+     *  Verifies the voucher actually exists so the marker can't be forged
+     *  with an arbitrary id. */
+    async markTallyBilled(tallyserial: string, voucherId: number) {
+        if (!tallyserial || !voucherId) {
+            return { success: false, message: 'tallyserial and voucher_id are required' };
+        }
+        const voucher = await this.db.queryOne<any>(
+            `SELECT id, vch_no FROM vch_details WHERE id = ?`,
+            [voucherId],
+        );
+        if (!voucher) return { success: false, message: `Voucher ${voucherId} not found` };
+        const result = await this.db.execute(
+            `UPDATE tallydetails SET billed_voucher_id = ?, billed_at = NOW() WHERE tallyserial = ?`,
+            [voucherId, tallyserial],
+        );
+        return { success: true, updated: result.affectedRows ?? 0, vch_no: voucher.vch_no || null };
     }
 
 
@@ -704,6 +763,161 @@ export class TallyService implements OnModuleInit {
         const ph = ids.map(() => '?').join(',');
         const result = await this.db.execute(
             `UPDATE vch_details SET tally_synced_at = NOW() WHERE id IN (${ph}) AND tally_synced_at IS NULL`,
+            ids,
+        );
+        return { acknowledged: result.affectedRows ?? 0 };
+    }
+
+    /** Stock item masters for Tally (poll-and-acknowledge, same pattern as
+     *  vouchers). Tally needs these BEFORE importing vouchers so every
+     *  <STOCKITEM> referenced by an inventory line already exists. */
+    async getTallyItems(opts: { page?: number; limit?: number; includeAll?: boolean; search?: string }) {
+        const where: string[] = [];
+        const whereParams: any[] = [];
+        if (!opts.includeAll) where.push('i.tally_synced_at IS NULL');
+        if (opts.search) { where.push('i.item_name LIKE ?'); whereParams.push(`%${opts.search}%`); }
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+        const page = opts.page || 1;
+        const limit = Math.min(opts.limit || 100, 500);
+        const offset = (page - 1) * limit;
+
+        const [countRow] = await this.db.query<any>(
+            `SELECT COUNT(*) as total FROM items i ${whereSql}`,
+            whereParams,
+        );
+
+        const rows = await this.db.query<any>(
+            `SELECT i.id, i.item_name, i.batch, i.gst, i.hsn,
+                    i.opening_qty, i.opening_rate, i.opening_value,
+                    i.created_at, i.updated_at, i.tally_synced_at,
+                    ig.name AS item_group, ic.name AS category, sm.name AS tally_flavour
+             FROM items i
+             LEFT JOIN item_groups ig     ON i.item_group_id = ig.id
+             LEFT JOIN item_categories ic ON i.category_id   = ic.id
+             LEFT JOIN singlemaster sm    ON i.tally_flavour_id = sm.id
+             ${whereSql}
+             ORDER BY i.id ASC
+             LIMIT ? OFFSET ?`,
+            [...whereParams, limit, offset],
+        );
+
+        const items = rows.map((r: any) => ({
+            id:              r.id,
+            item_name:       r.item_name,
+            item_group:      r.item_group || null,
+            category:        r.category || null,
+            tally_flavour:   r.tally_flavour || null,
+            batch_tracked:   r.batch === 'Yes',
+            gst_rate:        +Number(r.gst || 0).toFixed(2),
+            hsn:             r.hsn || null,
+            opening_qty:     +Number(r.opening_qty || 0).toFixed(3),
+            opening_rate:    +Number(r.opening_rate || 0).toFixed(2),
+            opening_value:   +Number(r.opening_value || 0).toFixed(2),
+            created_at:      r.created_at,
+            updated_at:      r.updated_at,
+            tally_synced_at: r.tally_synced_at || null,
+        }));
+
+        return { total: Number(countRow?.total) || 0, page, limit, items };
+    }
+
+    async acknowledgeTallyItems(ids: number[]): Promise<{ acknowledged: number }> {
+        if (!ids || ids.length === 0) return { acknowledged: 0 };
+        const ph = ids.map(() => '?').join(',');
+        const result = await this.db.execute(
+            `UPDATE items SET tally_synced_at = NOW() WHERE id IN (${ph}) AND tally_synced_at IS NULL`,
+            ids,
+        );
+        return { acknowledged: result.affectedRows ?? 0 };
+    }
+
+    /** Ledger masters for Tally (poll-and-acknowledge). One row per customer
+     *  record — in this app the customer table doubles as the ledger master
+     *  (party_ledger_id and ledger_entries.ledger_id both point at it).
+     *  Import these BEFORE vouchers so every <LEDGER> already exists. */
+    async getTallyLedgers(opts: { page?: number; limit?: number; includeAll?: boolean; search?: string }) {
+        const where: string[] = [];
+        const whereParams: any[] = [];
+        if (!opts.includeAll) where.push('c.tally_synced_at IS NULL');
+        if (opts.search) { where.push('c.company LIKE ?'); whereParams.push(`%${opts.search}%`); }
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+        const page = opts.page || 1;
+        const limit = Math.min(opts.limit || 100, 500);
+        const offset = (page - 1) * limit;
+
+        const [countRow] = await this.db.query<any>(
+            `SELECT COUNT(*) as total FROM customer c ${whereSql}`,
+            whereParams,
+        );
+
+        // State can be stored two ways: a numeric state-table id in c.state,
+        // or resolvable via the pincode table — same fallback the voucher
+        // export uses. Non-numeric c.state values are used as-is.
+        const rows = await this.db.query<any>(
+            `SELECT c.id, c.company, c.gstin,
+                    c.address1, c.address2, c.address3, c.city, c.pincode,
+                    c.state AS raw_state, s_direct.name AS state_direct, s_pin.name AS state_from_pincode,
+                    c.person, c.mobile, c.email,
+                    c.opening_balance, c.opening_balance_type, c.billbybill,
+                    c.active_status, c.date AS created_date, c.tally_synced_at,
+                    c.ledgergroup AS ledgergroup_id, lg.name AS ledger_group
+             FROM customer c
+             LEFT JOIN ledgergroup lg ON c.ledgergroup = lg.id
+             LEFT JOIN state s_direct ON c.state REGEXP '^[0-9]+$' AND s_direct.id = CAST(c.state AS UNSIGNED)
+             LEFT JOIN pincode pv     ON c.pincode = pv.pincode
+             LEFT JOIN state s_pin    ON pv.stateid = s_pin.id
+             ${whereSql}
+             ORDER BY c.id ASC
+             LIMIT ? OFFSET ?`,
+            [...whereParams, limit, offset],
+        );
+
+        const ledgers = rows.map((r: any) => {
+            const rawState = String(r.raw_state ?? '').trim();
+            const state = r.state_direct
+                || (rawState && !/^\d+$/.test(rawState) ? rawState : null)
+                || r.state_from_pincode
+                || null;
+            const opening = +Number(r.opening_balance || 0).toFixed(2);
+            return {
+                id:                   r.id,
+                ledger_name:          r.company,
+                // Parties created before ledgergroup existed have NULL —
+                // they're all Sundry Debtors, so default the export to that
+                // rather than shipping a group Tally can't file under.
+                ledger_group:         r.ledger_group || 'Sundry Debtors',
+                is_party:             !r.ledgergroup_id || Number(r.ledgergroup_id) === 26,
+                gstin:                r.gstin || null,
+                address: {
+                    address1: r.address1 || null,
+                    address2: r.address2 || null,
+                    address3: r.address3 || null,
+                    city:     r.city || null,
+                    state,
+                    pincode:  r.pincode || null,
+                },
+                contact_person:       r.person || null,
+                mobile:               r.mobile || null,
+                email:                r.email || null,
+                opening_balance:      opening,
+                opening_balance_type: opening ? (r.opening_balance_type || 'Dr') : null,
+                bill_by_bill:         r.billbybill === 'Yes',
+                active:               r.active_status !== 'Inactive',
+                created_at:           r.created_date || null,
+                tally_synced_at:      r.tally_synced_at || null,
+            };
+        });
+
+        return { total: Number(countRow?.total) || 0, page, limit, ledgers };
+    }
+
+    async acknowledgeTallyLedgers(ids: number[]): Promise<{ acknowledged: number }> {
+        if (!ids || ids.length === 0) return { acknowledged: 0 };
+        const ph = ids.map(() => '?').join(',');
+        const result = await this.db.execute(
+            `UPDATE customer SET tally_synced_at = NOW() WHERE id IN (${ph}) AND tally_synced_at IS NULL`,
             ids,
         );
         return { acknowledged: result.affectedRows ?? 0 };

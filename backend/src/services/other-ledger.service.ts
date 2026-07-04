@@ -39,9 +39,30 @@ export class OtherLedgerService implements OnModuleInit {
         }
     }
 
-    async findAll() {
+    async findAll(user?: { id?: string; role?: string }) {
         // Returns every ledger (including Sundry Debtors / parties) so the
         // Other Ledger screen can edit opening balance + group on any of them.
+        // Non-admin users with a ledger_group_id assigned only see ledgers
+        // filed under that group or any of its descendant groups.
+        // Semantics match VouchersService.getUserLedgerScope:
+        //   NULL ledger_group_id → not assigned → NO ledgers at all
+        //   0                    → "All Ledgers" sentinel → unrestricted
+        //   >0                   → that group and its child groups only
+        let scopeSql = '';
+        const params: any[] = [];
+        if (user?.id && (user.role || '').toLowerCase() !== 'admin') {
+            const row = await this.db.queryOne<any>(
+                `SELECT ledger_group_id FROM cloud_users WHERE id = ?`, [user.id],
+            ).catch(() => null);
+            if (row && (row.ledger_group_id === null || row.ledger_group_id === undefined)) {
+                return []; // no ledger group assigned → sees nothing
+            }
+            if (row && Number(row.ledger_group_id) > 0) {
+                const groupIds = await this.expandGroupTree(Number(row.ledger_group_id));
+                scopeSql = ` AND c.ledgergroup IN (${groupIds.map(() => '?').join(',')})`;
+                params.push(...groupIds);
+            }
+        }
         return this.db.query<any>(`
             SELECT c.id, c.company, c.ledgergroup,
                    lg.name AS ledgergroup_name,
@@ -49,9 +70,30 @@ export class OtherLedgerService implements OnModuleInit {
                    c.billbybill
             FROM customer c
             LEFT JOIN ledgergroup lg ON c.ledgergroup = lg.id
-            WHERE c.ledgergroup IS NOT NULL
+            WHERE c.ledgergroup IS NOT NULL${scopeSql}
             ORDER BY c.company ASC
-        `);
+        `, params);
+    }
+
+    /** A group plus all of its descendants (ledgergroup.parent_id tree). */
+    private async expandGroupTree(rootId: number): Promise<number[]> {
+        const rows = await this.db.query<any>(`SELECT id, parent_id FROM ledgergroup`).catch(() => [] as any[]);
+        const byParent = new Map<number, number[]>();
+        for (const r of rows) {
+            if (!r.parent_id || r.parent_id === r.id) continue;
+            const arr = byParent.get(Number(r.parent_id)) || [];
+            arr.push(Number(r.id));
+            byParent.set(Number(r.parent_id), arr);
+        }
+        const result: number[] = [];
+        const queue = [rootId];
+        while (queue.length) {
+            const id = queue.shift()!;
+            if (result.includes(id)) continue;
+            result.push(id);
+            queue.push(...(byParent.get(id) || []));
+        }
+        return result;
     }
 
     async create(data: { company: string; ledgergroup: number; opening_balance?: number; opening_balance_type?: string; billbybill?: string }) {

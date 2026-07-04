@@ -84,6 +84,19 @@ export class VchTypeService implements OnModuleInit {
             )
         `);
 
+        // Snapshot of the numbering/prefix/suffix config taken right before
+        // each edit, so a misconfiguration can be reviewed and restored.
+        await this.db.execute(`
+            CREATE TABLE IF NOT EXISTS vchtype_numbering_audit (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                vchtype_id   INT NOT NULL,
+                changed_by   VARCHAR(255) NULL,
+                changed_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+                snapshot     JSON NOT NULL,
+                INDEX idx_vt (vchtype_id, changed_at)
+            )
+        `);
+
         // Seed
         const [row] = await this.db.query<any>('SELECT COUNT(*) as cnt FROM vchtype');
         if ((row?.cnt ?? 0) === 0) {
@@ -166,8 +179,17 @@ export class VchTypeService implements OnModuleInit {
         numbering_periods?: { applicable_from: string; start_no: number; period_type: string }[];
         prefix_periods?: { applicable_from: string; particulars: string }[];
         suffix_periods?: { applicable_from: string; particulars: string }[];
-    }) {
+    }, changedBy?: string | null) {
         const existing = await this.db.queryOne<any>('SELECT is_system FROM vchtype WHERE id = ?', [id]);
+
+        // This edit touches numbering config — snapshot the state as it
+        // stands right now (before applying the incoming change) so it can
+        // be reviewed and restored later if the new config turns out wrong.
+        const touchesNumbering = data.numbering_mode !== undefined || data.vch_width !== undefined
+            || data.numbering_periods !== undefined || data.prefix_periods !== undefined || data.suffix_periods !== undefined;
+        if (touchesNumbering) {
+            await this.recordNumberingSnapshot(id, changedBy ?? null);
+        }
 
         const fields: string[] = [];
         const params: any[] = [];
@@ -221,6 +243,43 @@ export class VchTypeService implements OnModuleInit {
                 );
             }
         }
+    }
+
+    /** Snapshot the current numbering/prefix/suffix config for a type before it's overwritten. */
+    private async recordNumberingSnapshot(id: number, changedBy: string | null): Promise<void> {
+        const vt = await this.db.queryOne<any>('SELECT numbering_mode, vch_width FROM vchtype WHERE id = ?', [id]);
+        const numbering_periods = await this.db.query<any>(
+            `SELECT applicable_from, start_no, period_type FROM vchtype_numbering_period WHERE vchtype_id = ? ORDER BY applicable_from ASC`, [id]
+        );
+        const prefix_periods = await this.db.query<any>(
+            `SELECT applicable_from, particulars FROM vchtype_prefix_period WHERE vchtype_id = ? ORDER BY applicable_from ASC`, [id]
+        );
+        const suffix_periods = await this.db.query<any>(
+            `SELECT applicable_from, particulars FROM vchtype_suffix_period WHERE vchtype_id = ? ORDER BY applicable_from ASC`, [id]
+        );
+        const snapshot = {
+            numbering_mode: vt?.numbering_mode ?? 'manual',
+            vch_width: vt?.vch_width ?? 3,
+            numbering_periods, prefix_periods, suffix_periods,
+        };
+        await this.db.execute(
+            `INSERT INTO vchtype_numbering_audit (vchtype_id, changed_by, snapshot) VALUES (?, ?, ?)`,
+            [id, changedBy, JSON.stringify(snapshot)],
+        );
+    }
+
+    /** Past numbering/prefix/suffix config snapshots for a type, most recent first. */
+    async getAudit(id: number) {
+        const rows = await this.db.query<any>(
+            `SELECT id, changed_by, changed_at, snapshot FROM vchtype_numbering_audit
+             WHERE vchtype_id = ? ORDER BY changed_at DESC, id DESC`, [id],
+        );
+        return rows.map((r: any) => ({
+            id: r.id,
+            changed_by: r.changed_by,
+            changed_at: r.changed_at,
+            snapshot: typeof r.snapshot === 'string' ? JSON.parse(r.snapshot) : r.snapshot,
+        }));
     }
 
     async delete(id: number) {

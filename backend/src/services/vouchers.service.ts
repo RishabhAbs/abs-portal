@@ -1,5 +1,8 @@
-import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
+import { Injectable, OnModuleInit, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DbService } from '../database/db.service';
+
+/** Minimal shape of the JWT user object the report scoping needs. */
+type ScopedUser = { id?: string; role?: string } | undefined;
 
 /**
  * Voucher structure (matches Tally-like model):
@@ -15,6 +18,43 @@ import { DbService } from '../database/db.service';
 @Injectable()
 export class VouchersService implements OnModuleInit {
     constructor(private db: DbService) {}
+
+    /** Ledger-group scope for report queries.
+     *    null → unrestricted (admin, no user context, or the "All Ledgers"
+     *           sentinel value 0 on cloud_users.ledger_group_id)
+     *    []   → NO access (ledger_group_id not assigned) — callers must
+     *           return empty results / block access
+     *    ids  → the assigned group plus every descendant group
+     *  Mirrors OtherLedgerService.findAll's scoping so the reports and the
+     *  ledger picker always agree on visibility. */
+    private async getUserLedgerScope(user: ScopedUser): Promise<number[] | null> {
+        if (!user?.id || (user.role || '').toLowerCase() === 'admin') return null;
+        const row = await this.db.queryOne<any>(
+            `SELECT ledger_group_id FROM cloud_users WHERE id = ?`, [user.id],
+        ).catch(() => null);
+        if (!row) return null; // user row missing — don't lock out on a lookup glitch
+        if (row.ledger_group_id === null || row.ledger_group_id === undefined) return []; // not assigned → nothing
+        if (Number(row.ledger_group_id) === 0) return null; // "All Ledgers"
+
+        const all = await this.db.query<any>(`SELECT id, parent_id FROM ledgergroup`);
+        const children = new Map<number, number[]>();
+        for (const g of all) {
+            if (g.parent_id && g.parent_id !== g.id) {
+                const arr = children.get(Number(g.parent_id)) || [];
+                arr.push(Number(g.id));
+                children.set(Number(g.parent_id), arr);
+            }
+        }
+        const out: number[] = [];
+        const stack = [Number(row.ledger_group_id)];
+        while (stack.length) {
+            const id = stack.pop()!;
+            if (out.includes(id)) continue;
+            out.push(id);
+            stack.push(...(children.get(id) || []));
+        }
+        return out;
+    }
 
     async onModuleInit() {
         await this.db.execute(`
@@ -88,6 +128,45 @@ export class VouchersService implements OnModuleInit {
         // Make party_ledger_id nullable — Stock Journal vouchers have no party
         await this.db.execute(
             `ALTER TABLE vch_details MODIFY COLUMN party_ledger_id INT DEFAULT NULL`
+        ).catch(() => {});
+
+        // Trail of retroactive vch_no rewrites (e.g. re-applying a changed
+        // prefix/suffix to already-saved vouchers) — every change is logged
+        // here so it can be manually reviewed or reversed later.
+        await this.db.execute(`
+            CREATE TABLE IF NOT EXISTS vch_no_retrofit_audit (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                vch_id       INT NOT NULL,
+                old_vch_no   VARCHAR(100) NOT NULL,
+                new_vch_no   VARCHAR(100) NOT NULL,
+                changed_by   VARCHAR(255) NULL,
+                changed_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_vch (vch_id)
+            )
+        `);
+
+        // Payment-followup tracking for Outstanding report bills — one row
+        // per (ledger, bill) holding the CURRENT contact/next-date/remark,
+        // overwritten on each update (mirrors tallydetails' expiry-call
+        // pattern: latest state only, no separate interaction log).
+        await this.db.execute(`
+            CREATE TABLE IF NOT EXISTS bill_followup (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                ledger_id    INT NOT NULL,
+                bill_name    VARCHAR(255) NOT NULL,
+                status       ENUM('Followup','Payment','Error','Frustitting') DEFAULT NULL,
+                person_name  VARCHAR(255) DEFAULT NULL,
+                phone_number VARCHAR(50)  DEFAULT NULL,
+                next_date    DATE         DEFAULT NULL,
+                remark       TEXT         DEFAULT NULL,
+                updated_by   VARCHAR(255) DEFAULT NULL,
+                updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_bill (ledger_id, bill_name(191))
+            )
+        `);
+        // In case bill_followup was already created (via hot-reload) before status existed.
+        await this.db.execute(
+            `ALTER TABLE bill_followup ADD COLUMN status ENUM('Followup','Payment','Error','Frustitting') DEFAULT NULL AFTER bill_name`
         ).catch(() => {});
 
         await this.db.execute(`
@@ -401,7 +480,7 @@ export class VouchersService implements OnModuleInit {
         let assignedVchNo = data.vch_no || null;
         let vchNoBumped   = false; // true if we auto-incremented past a collision
         if (assignedVchNo && data.vch_type_id) {
-            assignedVchNo = await this.resolveUniqueVchNo(assignedVchNo, data.vch_type_id);
+            assignedVchNo = await this.resolveUniqueVchNo(assignedVchNo, data.vch_type_id, data.vch_date || undefined);
             if (assignedVchNo !== data.vch_no) vchNoBumped = true;
         }
         await this.validateBatchSerials(data.items || []);
@@ -684,8 +763,10 @@ export class VouchersService implements OnModuleInit {
     }
 
     /** Find the next unused voucher number starting from `candidate`.
-     *  Strips trailing digits, increments until no collision. Max 1000 attempts. */
-    private async resolveUniqueVchNo(candidate: string, vchTypeId: number): Promise<string> {
+     *  Increments the counter portion (never a prefix/suffix digit, e.g. a
+     *  year embedded in the suffix) until no collision. Max 1000 attempts. */
+    private async resolveUniqueVchNo(candidate: string, vchTypeId: number, forDate?: string): Promise<string> {
+        const { prefix, suffix } = await this.resolveAffixes(vchTypeId, forDate);
         let current = candidate;
         for (let i = 0; i < 1000; i++) {
             const [dup] = await this.db.query<any>(
@@ -693,12 +774,30 @@ export class VouchersService implements OnModuleInit {
                 [current, vchTypeId],
             );
             if ((dup?.cnt ?? 0) === 0) return current;
-            // Increment the trailing number in the string
-            current = current.replace(/(\d+)(?=\D*$)/, (m) => String(parseInt(m, 10) + 1).padStart(m.length, '0'));
-            // If no digits found, append a suffix
-            if (!/\d/.test(current)) current = current + '1';
+            current = this.bumpVchNo(current, prefix, suffix);
         }
         return current;
+    }
+
+    /** Increment the numeric counter in a voucher number, stripping the known
+     *  prefix/suffix first so digits inside the suffix (e.g. a year) are never
+     *  mistaken for the counter. Falls back to the last digit run in the whole
+     *  string when the value doesn't match the configured prefix/suffix
+     *  (e.g. manually-typed numbers that don't follow the current pattern). */
+    private bumpVchNo(value: string, prefix: string, suffix: string): string {
+        const hasPrefix = !!prefix && value.startsWith(prefix);
+        const hasSuffix = !!suffix && value.endsWith(suffix) && value.length >= prefix.length + suffix.length;
+        if (hasPrefix || hasSuffix) {
+            const body = value.slice(hasPrefix ? prefix.length : 0, hasSuffix ? value.length - suffix.length : undefined);
+            if (/^\d+$/.test(body)) {
+                const bumped = String(parseInt(body, 10) + 1).padStart(body.length, '0');
+                return `${hasPrefix ? prefix : ''}${bumped}${hasSuffix ? suffix : ''}`;
+            }
+        }
+        // Fallback: last digit run in the string (pre-existing best-effort behavior)
+        let fallback = value.replace(/(\d+)(?=\D*$)/, (m) => String(parseInt(m, 10) + 1).padStart(m.length, '0'));
+        if (!/\d/.test(fallback)) fallback = fallback + '1';
+        return fallback;
     }
 
     // Stamp the voucher with lead_id and close the linked lead. Idempotent and
@@ -765,7 +864,7 @@ export class VouchersService implements OnModuleInit {
         return { data, total: count?.total || 0, page, limit };
     }
 
-    async getDaybook(opts: { date?: string; dateFrom?: string; dateTo?: string }) {
+    async getDaybook(opts: { date?: string; dateFrom?: string; dateTo?: string; user?: ScopedUser }) {
         // Day Book amount = the party ledger's total exposure for the voucher.
         // Source of truth is vch_details.amount (the recorded grand total
         // including item value + GST + roundoff). Direction comes from the
@@ -783,6 +882,15 @@ export class VouchersService implements OnModuleInit {
         if (!opts.dateFrom && !opts.dateTo && opts.date) {
             where.push('DATE(v.vch_date) = ?');
             params.push(opts.date);
+        }
+        // Ledger-group-scoped users only see vouchers whose party ledger
+        // falls inside their assigned group subtree. Empty scope (no group
+        // assigned) = no rows at all.
+        const scope = await this.getUserLedgerScope(opts.user);
+        if (scope) {
+            if (scope.length === 0) return [];
+            where.push(`c.ledgergroup IN (${scope.map(() => '?').join(',')})`);
+            params.push(...scope);
         }
         const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -1354,8 +1462,21 @@ export class VouchersService implements OnModuleInit {
     async getUserWiseOutstanding(opts: {
         asOf?: string;
         search?: string;
+        user?: ScopedUser;
     }) {
         const asOf = opts.asOf || null;
+
+        // Ledger-group-scoped users only see bills of parties inside their
+        // assigned group subtree. Empty scope (no group assigned) = nothing.
+        const scope = await this.getUserLedgerScope(opts.user);
+        if (scope && scope.length === 0) {
+            return {
+                rows: [],
+                totals: { bill_count: 0, total_due: 0, due_0_15: 0, due_16_30: 0, due_30_plus: 0 },
+                asOf,
+            };
+        }
+        const scopeSql = scope ? `WHERE c.ledgergroup IN (${scope.map(() => '?').join(',')})` : '';
 
         const rows = await this.db.query<any>(
             `WITH ranked AS (
@@ -1392,9 +1513,10 @@ export class VouchersService implements OnModuleInit {
              INNER JOIN customer c ON b.ledger = c.id
              LEFT JOIN admin u       ON c.\`group\` = CAST(u.id AS CHAR)
              LEFT JOIN cloud_users cu ON c.cloud_group_id = cu.id
+             ${scopeSql}
              GROUP BY user_name
              ORDER BY total_due DESC, user_name ASC`,
-            [asOf, asOf, asOf],
+            [asOf, asOf, asOf, ...(scope || [])],
         );
 
         const search = (opts.search || '').trim().toLowerCase();
@@ -1441,10 +1563,12 @@ export class VouchersService implements OnModuleInit {
      *  Closing = opening + inward − outward (all in qty terms).
      *  Closing value uses the most recent inward rate — a pragmatic
      *  approximation in lieu of true FIFO/weighted-average costing. */
-    async getStockSummary(opts: {
+    /** Per-item opening/inward/outward/closing for the date window, including
+     *  each item's own item_group_id — the shared building block behind the
+     *  flat Stock Summary list AND the Group Summary-style drill-down below. */
+    private async computeItemStockRows(opts: {
         dateFrom?: string;
         dateTo?: string;
-        search?: string;
     }) {
         // Movement aggregated per item over the date window.
         // Inward  = Purchase qty − Purchase Return qty
@@ -1620,7 +1744,7 @@ export class VouchersService implements OnModuleInit {
         // All items, even those with no movement — those just show their
         // opening as both opening and closing so the report is complete.
         const items = await this.db.query<any>(
-            `SELECT i.id, i.item_name, i.gst,
+            `SELECT i.id, i.item_name, i.gst, i.item_group_id, i.category_id,
                     COALESCE(i.opening_qty, 0)   AS opening_qty,
                     COALESCE(i.opening_rate, 0)  AS opening_rate,
                     COALESCE(i.opening_value, 0) AS opening_value,
@@ -1630,7 +1754,6 @@ export class VouchersService implements OnModuleInit {
              ORDER BY i.item_name ASC`,
         );
 
-        const search = (opts.search || '').trim().toLowerCase();
         const data = items
             .map((i: any) => {
                 const m = moveByItem.get(Number(i.id)) || {};
@@ -1663,6 +1786,8 @@ export class VouchersService implements OnModuleInit {
                 return {
                     item_id:        i.id,
                     item_name:      i.item_name,
+                    item_group_id:  i.item_group_id != null ? Number(i.item_group_id) : null,
+                    category_id:    i.category_id   != null ? Number(i.category_id)   : null,
                     group_name:     i.group_name || null,
                     gst:            i.gst || null,
                     opening_qty:    +openingQty.toFixed(3),
@@ -1674,12 +1799,24 @@ export class VouchersService implements OnModuleInit {
                     closing_qty:    +closingQty.toFixed(3),
                     closing_value:  closingValue,
                 };
-            })
-            .filter((r: any) =>
-                !search
-                || r.item_name.toLowerCase().includes(search)
-                || (r.group_name || '').toLowerCase().includes(search),
-            );
+            });
+
+        return data;
+    }
+
+    /** Stock Summary — flat, searchable list of every item's movement. */
+    async getStockSummary(opts: {
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        const all = await this.computeItemStockRows(opts);
+        const search = (opts.search || '').trim().toLowerCase();
+        const data = all.filter((r) =>
+            !search
+            || r.item_name.toLowerCase().includes(search)
+            || (r.group_name || '').toLowerCase().includes(search),
+        );
 
         const totals = data.reduce((acc, r) => ({
             opening_value: acc.opening_value + r.opening_value,
@@ -1690,6 +1827,308 @@ export class VouchersService implements OnModuleInit {
 
         return {
             rows: data,
+            totals: {
+                opening_value: +totals.opening_value.toFixed(2),
+                inward_value:  +totals.inward_value.toFixed(2),
+                outward_value: +totals.outward_value.toFixed(2),
+                closing_value: +totals.closing_value.toFixed(2),
+            },
+        };
+    }
+
+    /** Stock Summary, Tally-style — root view: every top-level item group
+     *  (walking each item up to its true root ancestor) with rolled-up
+     *  opening/inward/outward/closing across all descendant items. Mirrors
+     *  getGroupSummary()'s approach for ledger groups. */
+    async getStockGroupSummary(opts: {
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        const allGroups = await this.db.query<any>(`SELECT id, name, parent_id FROM item_groups`);
+        const groupMap = new Map<number, { id: number; name: string; parent_id: number | null }>();
+        for (const g of allGroups) groupMap.set(Number(g.id), { id: Number(g.id), name: g.name, parent_id: g.parent_id != null ? Number(g.parent_id) : null });
+
+        const rootOf = (gid: number): { id: number; name: string } => {
+            let cur = groupMap.get(gid);
+            if (!cur) return { id: gid, name: 'Ungrouped' };
+            const visited = new Set<number>();
+            while (cur.parent_id != null && !visited.has(cur.id)) {
+                visited.add(cur.id);
+                const parent = groupMap.get(cur.parent_id);
+                if (!parent) break;
+                cur = parent;
+            }
+            return { id: cur.id, name: cur.name };
+        };
+
+        const items = await this.computeItemStockRows(opts);
+
+        const byRoot = new Map<number, { name: string; item_count: number; opening_qty: number; opening_value: number; inward_qty: number; inward_value: number; outward_qty: number; outward_value: number; closing_qty: number; closing_value: number }>();
+        for (const it of items) {
+            const root = it.item_group_id != null ? rootOf(it.item_group_id) : { id: -1, name: 'Ungrouped' };
+            if (!byRoot.has(root.id)) byRoot.set(root.id, { name: root.name, item_count: 0, opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_value: 0 });
+            const b = byRoot.get(root.id)!;
+            b.item_count    += 1;
+            b.opening_qty   += it.opening_qty;
+            b.opening_value += it.opening_value;
+            b.inward_qty    += it.inward_qty;
+            b.inward_value  += it.inward_value;
+            b.outward_qty   += it.outward_qty;
+            b.outward_value += it.outward_value;
+            b.closing_qty   += it.closing_qty;
+            b.closing_value += it.closing_value;
+        }
+
+        const search = (opts.search || '').trim().toLowerCase();
+        const data = Array.from(byRoot.entries())
+            .map(([gid, b]) => ({
+                group_id:      gid,
+                group_name:    b.name,
+                item_count:    b.item_count,
+                opening_qty:   +b.opening_qty.toFixed(3),
+                opening_value: +b.opening_value.toFixed(2),
+                inward_qty:    +b.inward_qty.toFixed(3),
+                inward_value:  +b.inward_value.toFixed(2),
+                outward_qty:   +b.outward_qty.toFixed(3),
+                outward_value: +b.outward_value.toFixed(2),
+                closing_qty:   +b.closing_qty.toFixed(3),
+                closing_value: +b.closing_value.toFixed(2),
+            }))
+            .filter((g) => !search || g.group_name.toLowerCase().includes(search))
+            .sort((a, b) => a.group_name.localeCompare(b.group_name));
+
+        const totals = data.reduce((acc, g) => ({
+            opening_value: acc.opening_value + g.opening_value,
+            inward_value:  acc.inward_value  + g.inward_value,
+            outward_value: acc.outward_value + g.outward_value,
+            closing_value: acc.closing_value + g.closing_value,
+        }), { opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
+
+        return {
+            rows: data,
+            totals: {
+                opening_value: +totals.opening_value.toFixed(2),
+                inward_value:  +totals.inward_value.toFixed(2),
+                outward_value: +totals.outward_value.toFixed(2),
+                closing_value: +totals.closing_value.toFixed(2),
+            },
+        };
+    }
+
+    /** Stock Summary drill-down — immediate sub-groups (each rolled up) plus
+     *  items directly assigned to this group. Mirrors getGroupLedgers(). */
+    async getStockGroupItems(opts: {
+        groupId: number;
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        // group_id = -1 is the synthetic "Ungrouped" bucket used at root for
+        // items with no item_group_id — there's no real item_groups row for
+        // it, it has no sub-groups, and its items match on IS NULL, not -1.
+        const isUngrouped = opts.groupId === -1;
+        const group = isUngrouped
+            ? { id: -1, name: 'Ungrouped', parent_id: null }
+            : await this.db.queryOne<any>(`SELECT id, name, parent_id FROM item_groups WHERE id = ?`, [opts.groupId]);
+        const childGroups = isUngrouped
+            ? []
+            : await this.db.query<any>(`SELECT id, name FROM item_groups WHERE parent_id = ? ORDER BY name ASC`, [opts.groupId]);
+
+        const items = await this.computeItemStockRows({ dateFrom: opts.dateFrom, dateTo: opts.dateTo });
+
+        const subGroupRows = childGroups.map((cg: any) => {
+            const inGroup = items.filter(it => it.item_group_id === Number(cg.id));
+            const agg = inGroup.reduce((acc, it) => ({
+                opening_qty: acc.opening_qty + it.opening_qty, opening_value: acc.opening_value + it.opening_value,
+                inward_qty:  acc.inward_qty  + it.inward_qty,  inward_value:  acc.inward_value  + it.inward_value,
+                outward_qty: acc.outward_qty + it.outward_qty, outward_value: acc.outward_value + it.outward_value,
+                closing_qty: acc.closing_qty + it.closing_qty, closing_value: acc.closing_value + it.closing_value,
+            }), { opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_value: 0 });
+            return {
+                row_type: 'subgroup' as const,
+                item_id: null, group_id: cg.id, item_name: cg.name, item_count: inGroup.length,
+                opening_qty: +agg.opening_qty.toFixed(3), opening_value: +agg.opening_value.toFixed(2),
+                inward_qty:  +agg.inward_qty.toFixed(3),  inward_value:  +agg.inward_value.toFixed(2),
+                outward_qty: +agg.outward_qty.toFixed(3), outward_value: +agg.outward_value.toFixed(2),
+                closing_qty: +agg.closing_qty.toFixed(3), closing_value: +agg.closing_value.toFixed(2),
+            };
+        });
+
+        const search = (opts.search || '').trim().toLowerCase();
+        const itemRows = items
+            .filter(it => isUngrouped ? it.item_group_id == null : it.item_group_id === opts.groupId)
+            .filter(it => !search || it.item_name.toLowerCase().includes(search))
+            .map(it => ({
+                row_type: 'item' as const,
+                item_id: it.item_id, group_id: null, item_name: it.item_name, item_count: null,
+                opening_qty: it.opening_qty, opening_value: it.opening_value,
+                inward_qty:  it.inward_qty,  inward_value:  it.inward_value,
+                outward_qty: it.outward_qty, outward_value: it.outward_value,
+                closing_qty: it.closing_qty, closing_value: it.closing_value,
+            }));
+
+        const allRows = [...subGroupRows, ...itemRows];
+        const totals = allRows.reduce((acc, r) => ({
+            opening_value: acc.opening_value + r.opening_value,
+            inward_value:  acc.inward_value  + r.inward_value,
+            outward_value: acc.outward_value + r.outward_value,
+            closing_value: acc.closing_value + r.closing_value,
+        }), { opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
+
+        return {
+            group: group || { id: opts.groupId, name: 'Unknown' },
+            rows: allRows,
+            totals: {
+                opening_value: +totals.opening_value.toFixed(2),
+                inward_value:  +totals.inward_value.toFixed(2),
+                outward_value: +totals.outward_value.toFixed(2),
+                closing_value: +totals.closing_value.toFixed(2),
+            },
+        };
+    }
+
+    /** Stock Summary, by Category — root view: every top-level item category
+     *  (walking each item up to its true root ancestor category) with
+     *  rolled-up movement. Item categories are an independent hierarchy from
+     *  item groups (a separate "by what kind of thing" cut vs "by what
+     *  group it's filed under"), so this mirrors getStockGroupSummary()
+     *  exactly but keyed on item_categories / category_id. */
+    async getStockCategorySummary(opts: {
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        const allCats = await this.db.query<any>(`SELECT id, name, parent_id FROM item_categories`);
+        const catMap = new Map<number, { id: number; name: string; parent_id: number | null }>();
+        for (const c of allCats) catMap.set(Number(c.id), { id: Number(c.id), name: c.name, parent_id: c.parent_id != null ? Number(c.parent_id) : null });
+
+        const rootOf = (cid: number): { id: number; name: string } => {
+            let cur = catMap.get(cid);
+            if (!cur) return { id: cid, name: 'Uncategorized' };
+            const visited = new Set<number>();
+            while (cur.parent_id != null && !visited.has(cur.id)) {
+                visited.add(cur.id);
+                const parent = catMap.get(cur.parent_id);
+                if (!parent) break;
+                cur = parent;
+            }
+            return { id: cur.id, name: cur.name };
+        };
+
+        const items = await this.computeItemStockRows(opts);
+
+        const byRoot = new Map<number, { name: string; item_count: number; opening_qty: number; opening_value: number; inward_qty: number; inward_value: number; outward_qty: number; outward_value: number; closing_qty: number; closing_value: number }>();
+        for (const it of items) {
+            const root = it.category_id != null ? rootOf(it.category_id) : { id: -1, name: 'Uncategorized' };
+            if (!byRoot.has(root.id)) byRoot.set(root.id, { name: root.name, item_count: 0, opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_value: 0 });
+            const b = byRoot.get(root.id)!;
+            b.item_count    += 1;
+            b.opening_qty   += it.opening_qty;
+            b.opening_value += it.opening_value;
+            b.inward_qty    += it.inward_qty;
+            b.inward_value  += it.inward_value;
+            b.outward_qty   += it.outward_qty;
+            b.outward_value += it.outward_value;
+            b.closing_qty   += it.closing_qty;
+            b.closing_value += it.closing_value;
+        }
+
+        const search = (opts.search || '').trim().toLowerCase();
+        const data = Array.from(byRoot.entries())
+            .map(([cid, b]) => ({
+                group_id:      cid,
+                group_name:    b.name,
+                item_count:    b.item_count,
+                opening_qty:   +b.opening_qty.toFixed(3),
+                opening_value: +b.opening_value.toFixed(2),
+                inward_qty:    +b.inward_qty.toFixed(3),
+                inward_value:  +b.inward_value.toFixed(2),
+                outward_qty:   +b.outward_qty.toFixed(3),
+                outward_value: +b.outward_value.toFixed(2),
+                closing_qty:   +b.closing_qty.toFixed(3),
+                closing_value: +b.closing_value.toFixed(2),
+            }))
+            .filter((g) => !search || g.group_name.toLowerCase().includes(search))
+            .sort((a, b) => a.group_name.localeCompare(b.group_name));
+
+        const totals = data.reduce((acc, g) => ({
+            opening_value: acc.opening_value + g.opening_value,
+            inward_value:  acc.inward_value  + g.inward_value,
+            outward_value: acc.outward_value + g.outward_value,
+            closing_value: acc.closing_value + g.closing_value,
+        }), { opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
+
+        return {
+            rows: data,
+            totals: {
+                opening_value: +totals.opening_value.toFixed(2),
+                inward_value:  +totals.inward_value.toFixed(2),
+                outward_value: +totals.outward_value.toFixed(2),
+                closing_value: +totals.closing_value.toFixed(2),
+            },
+        };
+    }
+
+    /** Stock Summary by Category — drill-down. Mirrors getStockGroupItems(). */
+    async getStockCategoryItems(opts: {
+        groupId: number;
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        const isUncategorized = opts.groupId === -1;
+        const group = isUncategorized
+            ? { id: -1, name: 'Uncategorized', parent_id: null }
+            : await this.db.queryOne<any>(`SELECT id, name, parent_id FROM item_categories WHERE id = ?`, [opts.groupId]);
+        const childCats = isUncategorized
+            ? []
+            : await this.db.query<any>(`SELECT id, name FROM item_categories WHERE parent_id = ? ORDER BY name ASC`, [opts.groupId]);
+
+        const items = await this.computeItemStockRows({ dateFrom: opts.dateFrom, dateTo: opts.dateTo });
+
+        const subGroupRows = childCats.map((cg: any) => {
+            const inCat = items.filter(it => it.category_id === Number(cg.id));
+            const agg = inCat.reduce((acc, it) => ({
+                opening_qty: acc.opening_qty + it.opening_qty, opening_value: acc.opening_value + it.opening_value,
+                inward_qty:  acc.inward_qty  + it.inward_qty,  inward_value:  acc.inward_value  + it.inward_value,
+                outward_qty: acc.outward_qty + it.outward_qty, outward_value: acc.outward_value + it.outward_value,
+                closing_qty: acc.closing_qty + it.closing_qty, closing_value: acc.closing_value + it.closing_value,
+            }), { opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_value: 0 });
+            return {
+                row_type: 'subgroup' as const,
+                item_id: null, group_id: cg.id, item_name: cg.name, item_count: inCat.length,
+                opening_qty: +agg.opening_qty.toFixed(3), opening_value: +agg.opening_value.toFixed(2),
+                inward_qty:  +agg.inward_qty.toFixed(3),  inward_value:  +agg.inward_value.toFixed(2),
+                outward_qty: +agg.outward_qty.toFixed(3), outward_value: +agg.outward_value.toFixed(2),
+                closing_qty: +agg.closing_qty.toFixed(3), closing_value: +agg.closing_value.toFixed(2),
+            };
+        });
+
+        const search = (opts.search || '').trim().toLowerCase();
+        const itemRows = items
+            .filter(it => isUncategorized ? it.category_id == null : it.category_id === opts.groupId)
+            .filter(it => !search || it.item_name.toLowerCase().includes(search))
+            .map(it => ({
+                row_type: 'item' as const,
+                item_id: it.item_id, group_id: null, item_name: it.item_name, item_count: null,
+                opening_qty: it.opening_qty, opening_value: it.opening_value,
+                inward_qty:  it.inward_qty,  inward_value:  it.inward_value,
+                outward_qty: it.outward_qty, outward_value: it.outward_value,
+                closing_qty: it.closing_qty, closing_value: it.closing_value,
+            }));
+
+        const allRows = [...subGroupRows, ...itemRows];
+        const totals = allRows.reduce((acc, r) => ({
+            opening_value: acc.opening_value + r.opening_value,
+            inward_value:  acc.inward_value  + r.inward_value,
+            outward_value: acc.outward_value + r.outward_value,
+            closing_value: acc.closing_value + r.closing_value,
+        }), { opening_value: 0, inward_value: 0, outward_value: 0, closing_value: 0 });
+
+        return {
+            group: group || { id: opts.groupId, name: 'Unknown' },
+            rows: allRows,
             totals: {
                 opening_value: +totals.opening_value.toFixed(2),
                 inward_value:  +totals.inward_value.toFixed(2),
@@ -1726,6 +2165,7 @@ export class VouchersService implements OnModuleInit {
         billName?: string;
         search?: string;
         side?: 'receivable' | 'payable' | 'all';
+        user?: ScopedUser;
     }) {
         const where: string[] = [];
         const params: any[] = [];
@@ -1736,6 +2176,16 @@ export class VouchersService implements OnModuleInit {
         if (upperBound)    { where.push('COALESCE(v.vch_date, ba.bill_date) <= ?'); params.push(upperBound); }
         if (opts.billName) { where.push('ba.billname LIKE ?'); params.push(`%${opts.billName}%`); }
         if (opts.search)   { where.push('c.company LIKE ?');   params.push(`%${opts.search}%`); }
+        // Ledger-group-scoped users only see bills of parties inside their
+        // assigned group subtree. Empty scope (no group assigned) = nothing.
+        const scope = await this.getUserLedgerScope(opts.user);
+        if (scope) {
+            if (scope.length === 0) {
+                return { bills: [], totalReceivable: 0, totalPayable: 0, asOf: opts.asOf || null };
+            }
+            where.push(`c.ledgergroup IN (${scope.map(() => '?').join(',')})`);
+            params.push(...scope);
+        }
         const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
         const havingClauses = ['ABS(SUM(r.amount)) >= 0.01'];
@@ -1790,22 +2240,78 @@ export class VouchersService implements OnModuleInit {
             [...params, upperBound || null, ...havingParams],
         );
 
+        // Latest payment-followup logged per (ledger, bill), if any.
+        const followupRows = await this.db.query<any>(
+            `SELECT ledger_id, bill_name, status, person_name, phone_number, next_date, remark FROM bill_followup`,
+        );
+        const followupByKey = new Map<string, any>();
+        for (const f of followupRows) followupByKey.set(`${f.ledger_id}::${f.bill_name}`, f);
+
+        // Each customer's primary contact (same "primary_contact='Yes' wins,
+        // else earliest" rule used across the CRM) — used as the followup
+        // modal's default Person Name/Number when no bill-specific one has
+        // been logged yet, so it's never blank on first open.
+        const contactRows = await this.db.query<any>(
+            `SELECT c.id AS customer_id, ccd.contact_person, COALESCE(ccd.mobile_no, c.mobile) AS mobile
+             FROM customer c
+             LEFT JOIN (
+                 SELECT customer_id, mobile_id,
+                        ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY CASE WHEN primary_contact = 'Yes' THEN 0 ELSE 1 END, id) AS rn
+                 FROM customer_contact_mapping_data
+                 WHERE status = 'Active'
+             ) prim_ccm ON c.id = prim_ccm.customer_id AND prim_ccm.rn = 1
+             LEFT JOIN customer_contact_details ccd ON prim_ccm.mobile_id = ccd.id`,
+        );
+        const contactByCustomer = new Map<number, { person: string | null; mobile: string | null }>();
+        for (const c of contactRows) contactByCustomer.set(Number(c.customer_id), {
+            person: c.contact_person || null, mobile: c.mobile || null,
+        });
+
+        // Every active contact linked to a customer (not just the primary
+        // one) — lets the followup modal offer a full dropdown of everyone
+        // on file for that party, instead of only the single default.
+        const allContactRows = await this.db.query<any>(
+            `SELECT ccm.customer_id, ccd.contact_person, ccd.mobile_no, ccm.primary_contact
+             FROM customer_contact_mapping_data ccm
+             JOIN customer_contact_details ccd ON ccm.mobile_id = ccd.id
+             WHERE ccm.status = 'Active' AND ccd.mobile_no IS NOT NULL AND ccd.mobile_no != ''
+             ORDER BY CASE WHEN ccm.primary_contact = 'Yes' THEN 0 ELSE 1 END, ccm.id`,
+        );
+        const allContactsByCustomer = new Map<number, { person: string | null; mobile: string; is_primary: boolean }[]>();
+        for (const c of allContactRows) {
+            const cid = Number(c.customer_id);
+            if (!allContactsByCustomer.has(cid)) allContactsByCustomer.set(cid, []);
+            allContactsByCustomer.get(cid)!.push({ person: c.contact_person || null, mobile: c.mobile_no, is_primary: c.primary_contact === 'Yes' });
+        }
+
         const sideFilter = opts.side || 'all';
         const bills = rows
-            .map((b: any) => ({
-                ledger_id: b.ledger_id,
-                party_name: b.party_name || 'Unallocated',
-                group_name: b.group_name || null,
-                reseller_name: b.reseller_name || null,
-                bill_name: b.bill_name || '—',
-                bill_date: b.bill_date,
-                last_activity: b.last_activity,
-                age_days: Number(b.age_days) || 0,
-                // Opening = absolute face value of the first transaction.
-                // Closing keeps its sign so the UI can render Dr / Cr.
-                opening_balance: +Math.abs(Number(b.opening_amount || 0)).toFixed(2),
-                closing_balance: +Number(b.closing_balance || 0).toFixed(2),
-            }))
+            .map((b: any) => {
+                const followup = followupByKey.get(`${b.ledger_id}::${b.bill_name || ''}`);
+                const contact = contactByCustomer.get(Number(b.ledger_id));
+                return {
+                    ledger_id: b.ledger_id,
+                    party_name: b.party_name || 'Unallocated',
+                    group_name: b.group_name || null,
+                    reseller_name: b.reseller_name || null,
+                    bill_name: b.bill_name || '—',
+                    bill_date: b.bill_date,
+                    last_activity: b.last_activity,
+                    age_days: Number(b.age_days) || 0,
+                    // Opening = absolute face value of the first transaction.
+                    // Closing keeps its sign so the UI can render Dr / Cr.
+                    opening_balance: +Math.abs(Number(b.opening_amount || 0)).toFixed(2),
+                    closing_balance: +Number(b.closing_balance || 0).toFixed(2),
+                    followup_status: followup?.status || null,
+                    followup_person: followup?.person_name || null,
+                    followup_phone:  followup?.phone_number || null,
+                    followup_next_date: followup?.next_date || null,
+                    followup_remark: followup?.remark || null,
+                    customer_person: contact?.person || null,
+                    customer_mobile: contact?.mobile || null,
+                    all_contacts: allContactsByCustomer.get(Number(b.ledger_id)) || [],
+                };
+            })
             .filter((b: any) => {
                 if (sideFilter === 'receivable') return b.closing_balance > 0;
                 if (sideFilter === 'payable')    return b.closing_balance < 0;
@@ -1816,6 +2322,40 @@ export class VouchersService implements OnModuleInit {
         const totalPayable    = +bills.reduce((s, b) => s + (b.closing_balance < 0 ? Math.abs(b.closing_balance) : 0), 0).toFixed(2);
 
         return { bills, totalReceivable, totalPayable, asOf: opts.asOf || null };
+    }
+
+    /** Save (or update) the payment-followup contact/next-date/remark for
+     *  one outstanding bill. Overwrites the current state for that
+     *  (ledger, bill) pair — same "latest state only" model as the Tally
+     *  expiry-call update. */
+    async upsertBillFollowup(opts: {
+        ledgerId: number;
+        billName: string;
+        status?: string | null;
+        personName?: string | null;
+        phoneNumber?: string | null;
+        nextDate?: string | null;
+        remark?: string | null;
+        updatedBy?: string | null;
+    }) {
+        await this.db.execute(
+            `INSERT INTO bill_followup (ledger_id, bill_name, status, person_name, phone_number, next_date, remark, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                status = VALUES(status),
+                person_name = VALUES(person_name),
+                phone_number = VALUES(phone_number),
+                next_date = VALUES(next_date),
+                remark = VALUES(remark),
+                updated_by = VALUES(updated_by)`,
+            [
+                opts.ledgerId, opts.billName, opts.status || null,
+                opts.personName || null, opts.phoneNumber || null,
+                opts.nextDate || null, opts.remark || null,
+                opts.updatedBy || null,
+            ],
+        );
+        return { success: true };
     }
 
     /** Tally-style ledger statement for a single ledger.
@@ -1829,13 +2369,21 @@ export class VouchersService implements OnModuleInit {
         dateFrom?: string;
         dateTo?: string;
         search?: string;
+        user?: ScopedUser;
     }) {
         const ledger = await this.db.queryOne<any>(
-            `SELECT id, company, opening_balance, opening_balance_type FROM customer WHERE id = ?`,
+            `SELECT id, company, ledgergroup, opening_balance, opening_balance_type FROM customer WHERE id = ?`,
             [opts.ledgerId],
         );
         if (!ledger) {
             return { ledger: null, opening: 0, closing: 0, rows: [] };
+        }
+
+        // Ledger-group-scoped users can only open statements for ledgers
+        // inside their assigned group subtree.
+        const scope = await this.getUserLedgerScope(opts.user);
+        if (scope && !scope.includes(Number(ledger.ledgergroup))) {
+            throw new ForbiddenException('This ledger is outside your assigned ledger group.');
         }
 
         // Master opening = customer.opening_balance (signed by Dr/Cr).
@@ -1971,6 +2519,131 @@ export class VouchersService implements OnModuleInit {
             totalDebit,
             totalCredit,
             rows: data,
+        };
+    }
+
+    /** Classify one inventory_entries row the same way computeItemStockRows
+     *  classifies aggregates (credit note → sales return; debit note →
+     *  purchase return; "return" in the name → return matching the qty
+     *  sign; otherwise qty sign picks purchase vs sale) — kept in sync with
+     *  that method so the item voucher register and the summary totals it
+     *  drills from always agree. */
+    private classifyInventoryRow(vchTypeName: string | null, qty: number, amount: number): 'purchase' | 'purchase_return' | 'sales' | 'sales_return' {
+        const t = (vchTypeName || '').toLowerCase();
+        const sign = qty !== 0 ? qty : amount;
+        const isCreditNote = t.includes('credit note');
+        const isDebitNote  = t.includes('debit note');
+        const isReturnWord = t.includes('return');
+        if (isDebitNote || (isReturnWord && sign >= 0)) return 'purchase_return';
+        if (isCreditNote || (isReturnWord && sign < 0)) return 'sales_return';
+        if (sign >= 0) return 'purchase';
+        return 'sales';
+    }
+
+    /** Stock item voucher register — Tally-style drill-down from a Stock
+     *  Summary row: one row per voucher that moved this item, in date
+     *  order, with a running opening/inward/outward/closing balance (qty
+     *  and value) so each row shows the balance immediately before and
+     *  after that transaction — same idea as getLedgerStatement() but for
+     *  item quantity/value instead of a ledger's Dr/Cr balance. */
+    async getItemVoucherRegister(opts: {
+        itemId: number;
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+    }) {
+        const item = await this.db.queryOne<any>(
+            `SELECT i.id, i.item_name,
+                    COALESCE(i.opening_qty, 0)   AS opening_qty,
+                    COALESCE(i.opening_value, 0) AS opening_value
+             FROM items i WHERE i.id = ?`, [opts.itemId],
+        );
+        if (!item) return { item: null, opening: { qty: 0, value: 0 }, closing: { qty: 0, value: 0 }, rows: [] };
+
+        // Prior movement (before dateFrom) nets into the opening balance,
+        // same as computeItemStockRows' priorMoveByItem.
+        let priorQty = 0, priorValue = 0;
+        if (opts.dateFrom) {
+            const priorRows = await this.db.query<any>(
+                `SELECT ie.qty, ie.amount, COALESCE(p.name, vt.name, '') AS vch_type_name
+                 FROM inventory_entries ie
+                 INNER JOIN ledger_entries le ON ie.led_id = le.id
+                 INNER JOIN vch_details v ON le.vch_id = v.id
+                 LEFT JOIN vchtype vt ON v.vch_type_id = vt.id
+                 LEFT JOIN vchtype p ON vt.parent_id = p.id AND vt.parent_id != vt.id
+                 WHERE ie.item_id = ? AND v.vch_date < ?`,
+                [opts.itemId, opts.dateFrom],
+            );
+            for (const r of priorRows) {
+                const qty = Number(r.qty) || 0;
+                const amt = Number(r.amount) || 0;
+                const cat = this.classifyInventoryRow(r.vch_type_name, qty, amt);
+                if (cat === 'purchase')             { priorQty += Math.abs(qty); priorValue += Math.abs(amt); }
+                else if (cat === 'purchase_return') { priorQty -= Math.abs(qty); priorValue -= Math.abs(amt); }
+                else if (cat === 'sales')            { priorQty -= Math.abs(qty); priorValue -= Math.abs(amt); }
+                else                                  { priorQty += Math.abs(qty); priorValue += Math.abs(amt); } // sales_return
+            }
+        }
+        const openingQty   = +((Number(item.opening_qty)   || 0) + priorQty).toFixed(3);
+        const openingValue = +((Number(item.opening_value) || 0) + priorValue).toFixed(2);
+
+        const where: string[] = ['ie.item_id = ?'];
+        const params: any[] = [opts.itemId];
+        if (opts.dateFrom) { where.push('v.vch_date >= ?'); params.push(opts.dateFrom); }
+        if (opts.dateTo)   { where.push('v.vch_date <= ?'); params.push(opts.dateTo); }
+        if (opts.search)   { where.push('(v.vch_no LIKE ? OR c.company LIKE ?)'); params.push(`%${opts.search}%`, `%${opts.search}%`); }
+
+        const rowsRaw = await this.db.query<any>(
+            `SELECT v.id AS vch_id, v.vch_no, v.vch_date,
+                    COALESCE(p.name, vt.name, '') AS vch_type_name,
+                    c.company AS party_name,
+                    ie.qty, ie.amount
+             FROM inventory_entries ie
+             INNER JOIN ledger_entries le ON ie.led_id = le.id
+             INNER JOIN vch_details v ON le.vch_id = v.id
+             LEFT JOIN vchtype vt ON v.vch_type_id = vt.id
+             LEFT JOIN vchtype p ON vt.parent_id = p.id AND vt.parent_id != vt.id
+             LEFT JOIN customer c ON v.party_ledger_id = c.id
+             WHERE ${where.join(' AND ')}
+             ORDER BY v.vch_date ASC, v.id ASC, ie.id ASC`,
+            params,
+        );
+
+        let runningQty = openingQty;
+        let runningValue = openingValue;
+        const rows = rowsRaw.map((r: any, idx: number) => {
+            const qty = Number(r.qty) || 0;
+            const amt = Number(r.amount) || 0;
+            const cat = this.classifyInventoryRow(r.vch_type_name, qty, amt);
+            let inwardQty = 0, inwardValue = 0, outwardQty = 0, outwardValue = 0;
+            if (cat === 'purchase')             { inwardQty  =  Math.abs(qty); inwardValue  =  Math.abs(amt); }
+            else if (cat === 'purchase_return') { inwardQty  = -Math.abs(qty); inwardValue  = -Math.abs(amt); }
+            else if (cat === 'sales')            { outwardQty =  Math.abs(qty); outwardValue =  Math.abs(amt); }
+            else                                  { outwardQty = -Math.abs(qty); outwardValue = -Math.abs(amt); } // sales_return
+
+            const rowOpeningQty = runningQty, rowOpeningValue = runningValue;
+            runningQty   = +(runningQty   + inwardQty  - outwardQty ).toFixed(3);
+            runningValue = +(runningValue + inwardValue - outwardValue).toFixed(2);
+
+            return {
+                sno: idx + 1,
+                vch_id: r.vch_id,
+                vch_no: r.vch_no,
+                vch_date: r.vch_date,
+                vch_type_name: r.vch_type_name || null,
+                particulars: r.party_name || '—',
+                opening_qty: +rowOpeningQty.toFixed(3), opening_value: +rowOpeningValue.toFixed(2),
+                inward_qty:  +inwardQty.toFixed(3),     inward_value:  +inwardValue.toFixed(2),
+                outward_qty: +outwardQty.toFixed(3),    outward_value: +outwardValue.toFixed(2),
+                closing_qty: runningQty,                closing_value: runningValue,
+            };
+        });
+
+        return {
+            item: { id: item.id, name: item.item_name },
+            opening: { qty: openingQty, value: openingValue },
+            closing: { qty: runningQty, value: runningValue },
+            rows,
         };
     }
 
@@ -2119,6 +2792,22 @@ export class VouchersService implements OnModuleInit {
         return { ...vch, ledgerEntries, billAllocations };
     }
 
+    /** Resolve the effective prefix/suffix particulars for a vch_type on a given date. */
+    private async resolveAffixes(vchTypeId: number, forDate?: string): Promise<{ prefix: string; suffix: string }> {
+        const today = forDate || new Date().toISOString().split('T')[0];
+        const pp = await this.db.queryOne<any>(
+            `SELECT particulars FROM vchtype_prefix_period
+             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
+            [vchTypeId, today]
+        );
+        const sp = await this.db.queryOne<any>(
+            `SELECT particulars FROM vchtype_suffix_period
+             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
+            [vchTypeId, today]
+        );
+        return { prefix: pp?.particulars ?? '', suffix: sp?.particulars ?? '' };
+    }
+
     /** Generate next voucher number for a given vch_type_id using date-effective periods. */
     async getNextVoucherNo(vchTypeId: number, forDate?: string): Promise<string> {
         const today = forDate || new Date().toISOString().split('T')[0];
@@ -2136,19 +2825,7 @@ export class VouchersService implements OnModuleInit {
              WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
             [vchTypeId, today]
         );
-        const pp = await this.db.queryOne<any>(
-            `SELECT particulars FROM vchtype_prefix_period
-             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
-            [vchTypeId, today]
-        );
-        const sp = await this.db.queryOne<any>(
-            `SELECT particulars FROM vchtype_suffix_period
-             WHERE vchtype_id = ? AND applicable_from <= ? ORDER BY applicable_from DESC LIMIT 1`,
-            [vchTypeId, today]
-        );
-
-        const prefix: string  = pp?.particulars ?? '';
-        const suffix: string  = sp?.particulars ?? '';
+        const { prefix, suffix } = await this.resolveAffixes(vchTypeId, today);
         const startNo: number = np?.start_no ?? 1;
         const periodType: string = np?.period_type ?? 'yearly';
         const currentPeriodFrom: string | null = np?.applicable_from
@@ -2190,26 +2867,99 @@ export class VouchersService implements OnModuleInit {
             dateParams.push(nextFrom);
         }
 
-        const last = await this.db.queryOne<{ vch_no: string }>(
-            `SELECT vch_no FROM vch_details WHERE vch_type_id = ? AND vch_no IS NOT NULL${dateFilter}
-             ORDER BY id DESC LIMIT 1`,
+        // Tally-style "Restart Numbering": the running count is purely a
+        // property of the numbering period's date range — how many numbered
+        // vouchers of this type have already landed in it — never a function
+        // of prefix/suffix text. Editing a prefix/suffix's wording or its own
+        // applicable_from later only changes the cosmetic wrapper on future
+        // numbers; it can never disrupt or reset the underlying count, and it
+        // never needs to parse (and possibly misparse) the last saved number.
+        const countRow = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) as cnt FROM vch_details WHERE vch_type_id = ? AND vch_no IS NOT NULL${dateFilter}`,
             [vchTypeId, ...dateParams]
         );
-
-        let nextNum = startNo;
-        if (last?.vch_no) {
-            const raw = last.vch_no;
-            const prefixOk = !prefix || raw.startsWith(prefix);
-            const suffixOk = !suffix || raw.endsWith(suffix);
-            if (prefixOk && suffixOk) {
-                let stripped = raw;
-                if (prefix) stripped = stripped.slice(prefix.length);
-                if (suffix) stripped = stripped.slice(0, -suffix.length);
-                const num = parseInt(stripped, 10);
-                if (!isNaN(num) && num >= startNo) nextNum = num + 1;
-            }
-        }
+        const nextNum = startNo + (countRow?.cnt ?? 0);
         return `${prefix}${String(nextNum).padStart(width, '0')}${suffix}`;
+    }
+
+    /**
+     * Re-wrap already-saved voucher numbers to match a changed prefix/suffix,
+     * for vouchers dated within the affected period's range. Only touches
+     * vouchers whose CURRENT number precisely matches the OLD prefix/suffix —
+     * anything ambiguous (e.g. a manually-typed number from before automatic
+     * numbering existed) is left alone and reported as skipped, never guessed.
+     * dryRun=true returns the preview without writing anything.
+     */
+    async retrofitVoucherNumbering(params: {
+        vchTypeId: number;
+        oldPrefix: string; oldSuffix: string;
+        newPrefix: string; newSuffix: string;
+        fromDate: string; toDate?: string;
+        changedBy?: string | null;
+        dryRun: boolean;
+    }): Promise<{
+        changed: { id: number; old: string; new: string }[];
+        skipped: { id: number; vch_no: string }[];
+    }> {
+        const { vchTypeId, oldPrefix, oldSuffix, newPrefix, newSuffix, fromDate, toDate, changedBy, dryRun } = params;
+
+        let dateFilter = ' AND vch_date >= ?';
+        const dateParams: any[] = [fromDate];
+        if (toDate) { dateFilter += ' AND vch_date < ?'; dateParams.push(toDate); }
+
+        const rows = await this.db.query<{ id: number; vch_no: string }>(
+            `SELECT id, vch_no FROM vch_details WHERE vch_type_id = ? AND vch_no IS NOT NULL${dateFilter}`,
+            [vchTypeId, ...dateParams],
+        );
+
+        const changed: { id: number; old: string; new: string }[] = [];
+        const skipped: { id: number; vch_no: string }[] = [];
+        for (const r of rows) {
+            const raw = r.vch_no;
+
+            // Already wrapped in the exact target format (e.g. a prior retrofit
+            // run already applied it, or it was saved that way to begin with)
+            // — leave it alone. Without this check, re-running against an
+            // assumed old prefix/suffix of '' would double-wrap an already
+            // "pay/xxx/paise dede" value into "pay/pay/xxx/paise dede/paise dede".
+            const alreadyTargetFormat = (newPrefix || newSuffix)
+                && raw.startsWith(newPrefix) && raw.endsWith(newSuffix)
+                && raw.length >= newPrefix.length + newSuffix.length;
+            if (alreadyTargetFormat) continue;
+
+            const hasPrefix = !oldPrefix || raw.startsWith(oldPrefix);
+            const hasSuffix = !oldSuffix || raw.endsWith(oldSuffix);
+            if (!hasPrefix || !hasSuffix || raw.length < oldPrefix.length + oldSuffix.length) {
+                skipped.push({ id: r.id, vch_no: raw });
+                continue;
+            }
+            const core = raw.slice(oldPrefix.length, raw.length - oldSuffix.length);
+            const newNo = `${newPrefix}${core}${newSuffix}`;
+            if (newNo !== raw) changed.push({ id: r.id, old: raw, new: newNo });
+        }
+
+        if (dryRun || changed.length === 0) return { changed, skipped };
+
+        return this.db.withTransaction(async (conn) => {
+            // Verify none of the new numbers collide with a voucher outside this batch
+            for (const c of changed) {
+                const [dup] = await this.db.query<any>(
+                    `SELECT COUNT(*) as cnt FROM vch_details WHERE vch_no = ? AND vch_type_id = ? AND id != ?`,
+                    [c.new, vchTypeId, c.id], conn,
+                );
+                if ((dup?.cnt ?? 0) > 0) {
+                    throw new BadRequestException(`Cannot retrofit: "${c.new}" would collide with an existing voucher number. No changes were made.`);
+                }
+            }
+            for (const c of changed) {
+                await this.db.execute(`UPDATE vch_details SET vch_no = ? WHERE id = ?`, [c.new, c.id], conn);
+                await this.db.execute(
+                    `INSERT INTO vch_no_retrofit_audit (vch_id, old_vch_no, new_vch_no, changed_by) VALUES (?, ?, ?, ?)`,
+                    [c.id, c.old, c.new, changedBy ?? null], conn,
+                );
+            }
+            return { changed, skipped };
+        });
     }
 
     /** Return open/pending bill references for a customer.
@@ -2304,8 +3054,8 @@ export class VouchersService implements OnModuleInit {
     /** Update an existing voucher: delete all child entries and re-insert. */
     async update(id: number, data: Parameters<VouchersService['create']>[0], isAdmin: boolean = false) {
         // Lock check — admin override only.
-        const row = await this.db.queryOne<{ checked_by: string | null }>(
-            `SELECT checked_by FROM vch_details WHERE id = ?`, [id],
+        const row = await this.db.queryOne<{ checked_by: string | null; vch_no: string | null }>(
+            `SELECT checked_by, vch_no FROM vch_details WHERE id = ?`, [id],
         );
         if (row?.checked_by && !isAdmin) {
             throw new BadRequestException('This voucher is marked as Checked. Only an admin can edit it.');
@@ -2319,7 +3069,17 @@ export class VouchersService implements OnModuleInit {
                 [data.vch_no, data.vch_type_id || null, id],
             );
             if ((dup?.cnt ?? 0) > 0) {
-                throw new BadRequestException(`Voucher number "${data.vch_no}" already exists for this voucher type`);
+                if (!row?.vch_no && data.vch_type_id) {
+                    // This voucher never had its own number before, so this is
+                    // effectively a first-time assignment (e.g. numbering
+                    // several previously-"—" vouchers in one session, which
+                    // can land on the same suggested number before either is
+                    // saved) — auto-bump past the collision like create() does,
+                    // instead of blocking the save.
+                    data = { ...data, vch_no: await this.resolveUniqueVchNo(data.vch_no, data.vch_type_id, data.vch_date || undefined) };
+                } else {
+                    throw new BadRequestException(`Voucher number "${data.vch_no}" already exists for this voucher type`);
+                }
             }
         }
 
