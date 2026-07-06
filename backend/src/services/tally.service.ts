@@ -63,6 +63,23 @@ export class TallyService implements OnModuleInit {
                 )
             `);
 
+            // Every renewal-call update appends here (tallydetails keeps only
+            // the latest state) so the Expiry reports can show how many times
+            // a serial has been worked.
+            await this.db.execute(`
+                CREATE TABLE IF NOT EXISTS expiry_call_history (
+                    id               INT AUTO_INCREMENT PRIMARY KEY,
+                    tallyserial      VARCHAR(50) NOT NULL,
+                    entry_type       VARCHAR(50)  DEFAULT NULL,
+                    expiry_status    VARCHAR(100) DEFAULT NULL,
+                    next_follow_date DATE         DEFAULT NULL,
+                    remarks          TEXT         DEFAULT NULL,
+                    updated_by       VARCHAR(255) DEFAULT NULL,
+                    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_serial (tallyserial)
+                )
+            `);
+
             // Billed marker on tallydetails — set ONLY by the quick-invoice
             // flow (markTallyBilled), never via the manual status dropdown.
             const billedColCheck = await this.db.query<any>(
@@ -279,7 +296,9 @@ export class TallyService implements OnModuleInit {
         if (expiry_status === 'Billed') {
             statusWhere = ' AND td.billed_voucher_id IS NOT NULL';
         } else if (expiry_status && expiry_status !== 'All') {
-            statusWhere = ' AND esm.name = ?';
+            // Billed serials belong to the Billed bucket ONLY — once a
+            // voucher is created they drop out of Pending / Not In Use / etc.
+            statusWhere = ' AND esm.name = ? AND td.billed_voucher_id IS NULL';
             statusParams.push(expiry_status);
         }
 
@@ -328,7 +347,8 @@ export class TallyService implements OnModuleInit {
                 esm.name as expiry_status_name,
                 COALESCE(cu.name, a.name) as staff_name,
                 r.name as reseller_name,
-                vb.vch_no as billed_vch_no
+                vb.vch_no as billed_vch_no,
+                (SELECT COUNT(*) FROM expiry_call_history ech WHERE ech.tallyserial = td.tallyserial) AS call_update_count
             FROM tallydetails td
             JOIN customer c ON td.customerid = c.id
             LEFT JOIN singlemaster sm ON td.tallyflavor = CAST(sm.id AS CHAR)
@@ -344,7 +364,8 @@ export class TallyService implements OnModuleInit {
 
         const data = await this.db.queryStandard(dataQuery, [...baseParams, ...statusParams, Number(limit), Number(offset)]);
 
-        // Get status counts based on baseWhere (includes search and dates)
+        // Get status counts based on baseWhere (includes search and dates).
+        // Billed serials are excluded here — they count only under Billed.
         const statusCountsQuery = `
             SELECT esm.name as status_name, COUNT(*) as count
             FROM tallydetails td
@@ -352,7 +373,7 @@ export class TallyService implements OnModuleInit {
             LEFT JOIN cloud_users cu ON c.cloud_group_id = cu.id
             LEFT JOIN admin a ON c.group = CAST(a.id AS CHAR)
             LEFT JOIN singlemaster esm ON td.expiry_status = CAST(esm.id AS CHAR) AND esm.type = 'ExpiryStatus'
-            ${baseWhere}
+            ${baseWhere} AND td.billed_voucher_id IS NULL
             GROUP BY esm.name
         `;
         const statusCounts = await this.db.query(statusCountsQuery, baseParams);
@@ -429,15 +450,40 @@ export class TallyService implements OnModuleInit {
 
         // Update current state in tallydetails
         await this.db.execute(`
-            UPDATE tallydetails 
-            SET expiry_status = ?, next_follow_date = ?, expiry_remarks = ?, 
+            UPDATE tallydetails
+            SET expiry_status = ?, next_follow_date = ?, expiry_remarks = ?,
                 last_call_type = ?, last_call_at = NOW()
             WHERE tallyserial = ?
         `, [
             statusId, data.next_follow_date || null, data.remarks, data.entry_type, data.serial
         ]);
 
+        // (getExpiryCallHistory reads this log back for the history popup.)
+        // Append to the interaction log — drives the per-serial update count
+        // on the Expiry reports. Fail-soft: the state update above is primary.
+        await this.db.execute(`
+            INSERT INTO expiry_call_history (tallyserial, entry_type, expiry_status, next_follow_date, remarks, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+            data.serial, data.entry_type || null, data.expiry_status || null,
+            data.next_follow_date || null, data.remarks || null, data.user_name || null,
+        ]).catch(() => {});
+
         return { success: true };
+    }
+
+    /** Renewal-call interaction log for one serial, newest first — powers
+     *  the status-history popup on the Expiry reports. */
+    async getExpiryCallHistory(serial: string) {
+        if (!serial) return [];
+        return this.db.query<any>(
+            `SELECT entry_type, expiry_status, next_follow_date, remarks, updated_by, created_at
+             FROM expiry_call_history
+             WHERE tallyserial = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 200`,
+            [serial],
+        );
     }
 
     // ── Manual sync of a single serial against the Tally API (on-demand) ──

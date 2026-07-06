@@ -573,12 +573,24 @@ export class DashboardService {
     ).catch(() => null);
     const userId = userRow?.id || null;
 
+    // Achievement = NET SALES: Sales vouchers add, Credit Notes (sales
+    // returns) subtract. Purchases / Debit Notes are NOT achievements —
+    // the old formula mixed them in and took ABS(SUM(qty)) per item,
+    // which let purchases cancel sales and produced numbers that matched
+    // no report (Dashboard NEW ≠ Stock Summary NEW). This classification
+    // now agrees with the Stock Summary's outward (sales) column.
     const achievedByGroup = async (startDate: string, endDate: string) => {
       const [vchRows, cloudRow] = await Promise.all([
         this.db.query<any>(
           `SELECT ic.name AS category_name, ig.name AS group_name, i.item_name,
-                  ABS(COALESCE(SUM(ie.qty), 0)) AS total_qty,
-                  ABS(COALESCE(SUM(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100)), 0)) AS total_amount
+                  COALESCE(SUM(CASE
+                    WHEN COALESCE(p.name, vt.name) = 'Sales'       THEN ABS(ie.qty)
+                    WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.qty)
+                    ELSE 0 END), 0) AS total_qty,
+                  COALESCE(SUM(CASE
+                    WHEN COALESCE(p.name, vt.name) = 'Sales'       THEN ABS(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100))
+                    WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100))
+                    ELSE 0 END), 0) AS total_amount
              FROM vch_details v
              JOIN vchtype vt            ON v.vch_type_id = vt.id
              LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
@@ -587,7 +599,7 @@ export class DashboardService {
              JOIN items i               ON ie.item_id    = i.id
              LEFT JOIN item_categories ic ON ic.id       = i.category_id
              LEFT JOIN item_groups ig    ON ig.id         = i.item_group_id
-            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Debit Note', 'Purchase')
+            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Credit Note')
               AND (v.created_by = ? OR v.created_by = ?)
               AND v.vch_date BETWEEN ? AND ?
             GROUP BY i.id, i.item_name, ic.id, ic.name, ig.id, ig.name`,
@@ -607,12 +619,12 @@ export class DashboardService {
       const bucket: Record<string, { qty: number; amount: number }> = {};
       for (const f of fields) bucket[f] = { qty: 0, amount: 0 };
       for (const r of vchRows) {
-        const catFromCategory = matchCat(r.category_name);
-        const isUnclassified = !catFromCategory || (r.category_name || '').toLowerCase() === 'others';
-        const cat = isUnclassified
-          ? (matchCat(r.item_name) ?? matchCat(r.group_name) ?? catFromCategory)
-          : catFromCategory;
-        if (!cat) continue;
+        // Classify strictly by item category — the same grouping the Stock
+        // Summary uses — so both screens always show identical numbers.
+        // The old item-name fallback leaked "Others" items into targets
+        // (e.g. "...RENEWAL" matched 'new' and inflated NEW).
+        const cat = matchCat(r.category_name);
+        if (!cat || (r.category_name || '').toLowerCase() === 'others') continue;
         bucket[cat].qty    += Number(r.total_qty || 0);
         bucket[cat].amount += Number(r.total_amount || 0);
       }
@@ -668,6 +680,85 @@ export class DashboardService {
         visit:      metric('visit'),
         call:       metric('call'),
       },
+    };
+  }
+
+  // Debug helper: return full performance payload plus raw plan rows and
+  // voucher aggregates for the MTD/QTD/FY ranges so we can inspect why
+  // numbers are zero or missing.
+  async getPerformanceDebug(userName: string, fy: string) {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    const today = now.toISOString().split('T')[0];
+
+    const fyYear = month >= 3 ? year : year - 1;
+    const fyStr = fy || `${fyYear}-${String(fyYear + 1).slice(2)}`;
+    const fyStart = `${fyYear}-04-01`;
+
+    const mtdStart = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
+    const qtdCalendarStart =
+      month >= 3 && month <= 5 ? 3
+      : month >= 6 && month <= 8 ? 6
+      : month >= 9 && month <= 11 ? 9
+      : 0;
+    const qtdStart = `${year}-${String(qtdCalendarStart + 1).padStart(2, '0')}-01`;
+
+    const MONTHS_CAL = ['April','May','June','July','August','September','October','November','December','January','February','March'];
+    const fyMonthIndex = month >= 3 ? month - 3 : month + 9;
+    const currentMonthName = MONTHS_CAL[fyMonthIndex];
+    const qStart = Math.floor(fyMonthIndex / 3) * 3;
+    const qtdMonths = MONTHS_CAL.slice(qStart, fyMonthIndex + 1);
+
+    // Resolve user id if possible
+    const userRow = await this.db.queryOne<any>(`SELECT id FROM cloud_users WHERE name = ? LIMIT 1`, [userName]).catch(() => null);
+    const userId = userRow?.id || null;
+
+    // Raw plan rows for this user/fy
+    const planRows = await this.db.query<any>(`SELECT * FROM user_targets WHERE user_name = ? AND fy = ?`, [userName, fyStr]).catch(() => [] as any[]);
+
+    // Voucher aggregates per category for given date ranges (MTD/QTD/FY)
+    const vchAggForRange = async (startDate: string, endDate: string) => {
+      const rows = await this.db.query<any>(
+        `SELECT ic.name AS category_name,
+                COALESCE(SUM(CASE WHEN COALESCE(p.name, vt.name) = 'Sales' THEN ABS(ie.qty) WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.qty) ELSE 0 END),0) AS total_qty,
+                COALESCE(SUM(CASE WHEN COALESCE(p.name, vt.name) = 'Sales' THEN ABS(ie.amount * (1+COALESCE(ie.gst_rate,0)/100)) WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.amount * (1+COALESCE(ie.gst_rate,0)/100)) ELSE 0 END),0) AS total_amount
+           FROM vch_details v
+           JOIN vchtype vt ON v.vch_type_id = vt.id
+           LEFT JOIN vchtype p ON vt.parent_id = p.id AND vt.parent_id != vt.id
+           JOIN ledger_entries le ON le.vch_id = v.id
+           JOIN inventory_entries ie ON ie.led_id = le.id
+           JOIN items i ON ie.item_id = i.id
+           LEFT JOIN item_categories ic ON ic.id = i.category_id
+          WHERE COALESCE(p.name, vt.name) IN ('Sales','Credit Note')
+            AND (v.created_by = ? OR v.created_by = ?)
+            AND v.vch_date BETWEEN ? AND ?
+          GROUP BY ic.name`,
+        [userName, userId, startDate, endDate]
+      ).catch(() => [] as any[]);
+      return rows;
+    };
+
+    const [mtdVch, qtdVch, fyVch] = await Promise.all([
+      vchAggForRange(mtdStart, today),
+      vchAggForRange(qtdStart, today),
+      vchAggForRange(fyStart, today),
+    ]);
+
+    const perf = await this.getMyPerformance(userName, fy);
+
+    return {
+      user: userName,
+      fy: fyStr,
+      perf,
+      plans: planRows,
+      vch: {
+        mtd: mtdVch,
+        qtd: qtdVch,
+        fy: fyVch,
+      },
+      computed_dates: { mtdStart, qtdStart, fyStart, today },
     };
   }
 
@@ -729,13 +820,23 @@ export class DashboardService {
 
     // Run the voucher query once for a date range, grouped by (created_by, item_category).
     // Returns nested map: user -> cat -> {qty, amount}.
+    // Same net-sales classification as getMyPerformance: Sales adds,
+    // Credit Note subtracts, purchases excluded. Vouchers with NULL
+    // created_by are grouped under 'Unassigned' instead of being dropped
+    // so the company-wide totals still match the Stock Summary.
     const achievedAllUsers = async (startDate: string, endDate: string) => {
       const [rows, cloudRow] = await Promise.all([
         this.db.query<any>(
-          `SELECT COALESCE(cu.name, v.created_by) AS user_name,
+          `SELECT COALESCE(cu.name, v.created_by, 'Unassigned') AS user_name,
                   ic.name AS category_name, ig.name AS group_name, i.item_name,
-                  ABS(COALESCE(SUM(ie.qty), 0)) AS total_qty,
-                  ABS(COALESCE(SUM(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100)), 0)) AS total_amount
+                  COALESCE(SUM(CASE
+                    WHEN COALESCE(p.name, vt.name) = 'Sales'       THEN ABS(ie.qty)
+                    WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.qty)
+                    ELSE 0 END), 0) AS total_qty,
+                  COALESCE(SUM(CASE
+                    WHEN COALESCE(p.name, vt.name) = 'Sales'       THEN ABS(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100))
+                    WHEN COALESCE(p.name, vt.name) = 'Credit Note' THEN -ABS(ie.amount * (1 + COALESCE(ie.gst_rate,0) / 100))
+                    ELSE 0 END), 0) AS total_amount
              FROM vch_details v
              JOIN vchtype vt            ON v.vch_type_id = vt.id
              LEFT JOIN vchtype p        ON vt.parent_id  = p.id AND vt.parent_id != vt.id
@@ -745,10 +846,9 @@ export class DashboardService {
              JOIN items i               ON ie.item_id    = i.id
              LEFT JOIN item_categories ic ON ic.id       = i.category_id
              LEFT JOIN item_groups ig    ON ig.id         = i.item_group_id
-            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Debit Note', 'Purchase')
+            WHERE COALESCE(p.name, vt.name) IN ('Sales', 'Credit Note')
               AND v.vch_date BETWEEN ? AND ?
-              AND v.created_by IS NOT NULL
-            GROUP BY COALESCE(cu.name, v.created_by), i.id, i.item_name, ic.id, ic.name, ig.id, ig.name`,
+            GROUP BY COALESCE(cu.name, v.created_by, 'Unassigned'), i.id, i.item_name, ic.id, ic.name, ig.id, ig.name`,
           [startDate, endDate],
         ).catch(() => [] as any[]),
         // Cloud has no per-user attribution — use company-wide cloud_activities total
@@ -764,12 +864,10 @@ export class DashboardService {
       const cloudTotal = Number(cloudRow?.cloud_total || 0);
       const byUser: Record<string, Record<Cat, { qty: number; amount: number }>> = {};
       for (const r of rows) {
-        const catFromCategory = matchCat(r.category_name);
-        const isUnclassified = !catFromCategory || (r.category_name || '').toLowerCase() === 'others';
-        const cat = isUnclassified
-          ? (matchCat(r.item_name) ?? matchCat(r.group_name) ?? catFromCategory)
-          : catFromCategory;
-        if (!cat) continue;
+        // Strict category classification — must mirror the Stock Summary
+        // (see getMyPerformance's achievedByGroup for rationale).
+        const cat = matchCat(r.category_name);
+        if (!cat || (r.category_name || '').toLowerCase() === 'others') continue;
         const u = r.user_name;
         if (!byUser[u]) {
           byUser[u] = {} as any;

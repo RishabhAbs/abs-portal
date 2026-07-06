@@ -4,6 +4,7 @@ import { Search, Calendar, Phone, Building2, User, Tag, Clock, ChevronLeft, Chev
 import { tallyApi } from '../services/api';
 import UpdateExpiryModal from '../components/Tally/UpdateExpiryModal';
 import QuickInvoiceModal from '../components/Tally/QuickInvoiceModal';
+import UpdateHistoryModal, { HistoryEntry } from '../components/UpdateHistoryModal';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
 
@@ -54,6 +55,24 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
     const [selectedTally, setSelectedTally] = useState<any>(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [quickInvoiceTarget, setQuickInvoiceTarget] = useState<{ customerId: number; companyName: string; tallyserial?: string; tallyFlavourId?: number } | null>(null);
+
+    // Status/call history popup: click the ×N badge → full interaction log
+    const [historyTarget, setHistoryTarget] = useState<{ title: string } | null>(null);
+    const [historyRows, setHistoryRows] = useState<HistoryEntry[]>([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const openCallHistory = async (item: any) => {
+        setHistoryTarget({ title: `${item.company_name || ''} — ${item.tallyserial}` });
+        setHistoryRows([]);
+        setHistoryLoading(true);
+        try {
+            const res = await tallyApi.getExpiryCallHistory(item.tallyserial);
+            if (res.success) setHistoryRows((res.data || []).map((r: any) => ({
+                when: r.created_at, status: r.expiry_status,
+                next_date: r.next_follow_date, remark: r.remarks, by: r.updated_by,
+            })));
+        } catch { /* modal shows empty state */ }
+        finally { setHistoryLoading(false); }
+    };
 
     const statuses = [
         { name: 'All', color: '#28a745' }, // Green
@@ -458,8 +477,17 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                                     <td className="px-3 py-1.5 text-[12px] text-gray-700 border border-gray-300">
                                         {item.flavor_name || 'Silver'}
                                     </td>
-                                    <td className="px-3 py-1.5 text-[12px] text-gray-700 border border-gray-300 whitespace-nowrap">
-                                        {item.next_follow_date ? new Date(item.next_follow_date).toLocaleDateString('en-GB') : '-'}
+                                    <td className="px-3 py-1.5 text-[12px] text-gray-700 border border-gray-300 overflow-hidden">
+                                        <span className="whitespace-nowrap">{item.next_follow_date ? new Date(item.next_follow_date).toLocaleDateString('en-GB') : '-'}</span>
+                                        {Number(item.call_update_count) > 0 && (
+                                            <span className="mt-0.5 block">
+                                                <button onClick={(e) => { e.stopPropagation(); openCallHistory(item); }}
+                                                    className="inline-block text-[9px] leading-none font-bold bg-blue-100 text-blue-700 border border-blue-300 rounded-full px-1.5 py-0.5 hover:bg-blue-200 cursor-pointer"
+                                                    title={`View ${item.call_update_count} update(s) on this serial`}>
+                                                    ×{item.call_update_count}
+                                                </button>
+                                            </span>
+                                        )}
                                     </td>
                                     <td className="px-3 py-1.5 text-[12px] text-gray-600 border border-gray-300 truncate" title={item.expiry_remarks}>
                                         {item.expiry_remarks || '-'}
@@ -512,6 +540,17 @@ const ExpiryRenewPage: React.FC<ExpiryRenewPageProps> = ({ customerType }) => {
                     onClose={() => setQuickInvoiceTarget(null)}
                     onSuccess={fetchReport}
                     data={quickInvoiceTarget}
+                />
+            )}
+
+            {historyTarget && (
+                <UpdateHistoryModal
+                    isOpen={true}
+                    onClose={() => setHistoryTarget(null)}
+                    title={historyTarget.title}
+                    subtitle="Renewal call history — newest first"
+                    loading={historyLoading}
+                    entries={historyRows}
                 />
             )}
         </div>

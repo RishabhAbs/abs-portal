@@ -354,16 +354,37 @@ export class ActivitiesService {
     return result.affectedRows || 0;
   }
 
-  /** Auto-create a Sales → Tax Invoice voucher for a just-created Billing
+  /** Auto-create a Sales-family voucher for a just-created Billing
    *  Activity: one line of the fixed AUTO_INVOICE_ITEM_NAME item, qty 1,
    *  rate = the activity's own bill_amount, using this type's own
    *  auto-numbering (falls back to no number under manual numbering).
-   *  Returns null (never throws) if the Tax Invoice type or the fixed item
+   *
+   *  Voucher type: the caller-picked Sales child if given (validated as a
+   *  Sales-family type), else "Cloud Billing", else "Tax Invoice".
+   *  Returns null (never throws) if no usable type or the fixed item
    *  isn't set up — the caller logs that as a soft failure. */
-  private async autoCreateTaxInvoiceForActivity(activity: Activity): Promise<{ id: number; vch_no: string } | null> {
-    const vchType = await this.db.queryOne<{ id: number }>(
-      `SELECT id FROM vchtype WHERE LOWER(name) = 'tax invoice' LIMIT 1`,
-    );
+  private async autoCreateTaxInvoiceForActivity(activity: Activity, voucherTypeId?: number): Promise<{ id: number; vch_no: string } | null> {
+    let vchType: { id: number } | null = null;
+    if (voucherTypeId) {
+      // Only accept a type that actually belongs to the Sales family —
+      // an arbitrary id must not create Payments/Journals from here.
+      vchType = await this.db.queryOne<{ id: number }>(
+        `SELECT vt.id FROM vchtype vt
+         LEFT JOIN vchtype p ON vt.parent_id = p.id
+         WHERE vt.id = ? AND (LOWER(vt.name) = 'sales' OR LOWER(p.name) = 'sales') LIMIT 1`,
+        [voucherTypeId],
+      );
+    }
+    if (!vchType) {
+      vchType = await this.db.queryOne<{ id: number }>(
+        `SELECT id FROM vchtype WHERE LOWER(name) = 'cloud billing' LIMIT 1`,
+      );
+    }
+    if (!vchType) {
+      vchType = await this.db.queryOne<{ id: number }>(
+        `SELECT id FROM vchtype WHERE LOWER(name) = 'tax invoice' LIMIT 1`,
+      );
+    }
     if (!vchType) return null;
 
     const item = await this.db.queryOne<{ id: number; gst: number }>(
@@ -972,7 +993,10 @@ export class ActivitiesService {
       !(resultActivity as any).voucher_no
     ) {
       try {
-        const voucherInfo = await this.autoCreateTaxInvoiceForActivity(resultActivity);
+        const voucherInfo = await this.autoCreateTaxInvoiceForActivity(
+          resultActivity,
+          (data as any).voucher_type_id ? Number((data as any).voucher_type_id) : undefined,
+        );
         if (voucherInfo) {
           await this.markActivitiesBilled([resultActivity.id], { voucherId: voucherInfo.id, voucherNo: voucherInfo.vch_no });
           (resultActivity as any).voucher_id = voucherInfo.id;

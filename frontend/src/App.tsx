@@ -15,6 +15,7 @@ import Servers from './pages/Servers';
 import Customers from './pages/CustomerList';
 import InactiveCustomers from './pages/InactiveCustomers';
 import GroupChangeReport from './pages/GroupChangeReport';
+import GroupTransfer from './pages/GroupTransfer';
 import Reseller from './pages/Reseller';
 import Mapping from './pages/Mapping';
 import Users from './pages/Users';
@@ -183,6 +184,7 @@ function App() {
                 <Route path="customers" element={<PermissionGuard entity={['customers_our', 'customers_not_our']}><Customers /></PermissionGuard>} />
                 <Route path="customers/inactive" element={<PermissionGuard adminOnly><InactiveCustomers /></PermissionGuard>} />
                 <Route path="group-change" element={<PermissionGuard entity="group_change"><GroupChangeReport /></PermissionGuard>} />
+                <Route path="group-transfer" element={<PermissionGuard entity="ledger_groups"><GroupTransfer /></PermissionGuard>} />
                 <Route path="resellers" element={<PermissionGuard entity="resellers"><Reseller /></PermissionGuard>} />
                 {/* Service Module */}
                 <Route path="service">

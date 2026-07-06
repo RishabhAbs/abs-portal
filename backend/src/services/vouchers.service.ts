@@ -169,6 +169,25 @@ export class VouchersService implements OnModuleInit {
             `ALTER TABLE bill_followup ADD COLUMN status ENUM('Followup','Payment','Error','Frustitting') DEFAULT NULL AFTER bill_name`
         ).catch(() => {});
 
+        // Every followup save also appends here (bill_followup keeps only the
+        // latest state) so the Outstanding report can show how many times a
+        // bill has been chased.
+        await this.db.execute(`
+            CREATE TABLE IF NOT EXISTS bill_followup_history (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                ledger_id    INT NOT NULL,
+                bill_name    VARCHAR(255) NOT NULL,
+                status       VARCHAR(30)  DEFAULT NULL,
+                person_name  VARCHAR(255) DEFAULT NULL,
+                phone_number VARCHAR(50)  DEFAULT NULL,
+                next_date    DATE         DEFAULT NULL,
+                remark       TEXT         DEFAULT NULL,
+                updated_by   VARCHAR(255) DEFAULT NULL,
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_bill (ledger_id, bill_name(191))
+            )
+        `);
+
         await this.db.execute(`
             CREATE TABLE IF NOT EXISTS ledger_entries (
                 id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -2247,6 +2266,13 @@ export class VouchersService implements OnModuleInit {
         const followupByKey = new Map<string, any>();
         for (const f of followupRows) followupByKey.set(`${f.ledger_id}::${f.bill_name}`, f);
 
+        // How many times each bill has been followed up (full interaction log).
+        const followupCountRows = await this.db.query<any>(
+            `SELECT ledger_id, bill_name, COUNT(*) AS cnt FROM bill_followup_history GROUP BY ledger_id, bill_name`,
+        ).catch(() => [] as any[]);
+        const followupCountByKey = new Map<string, number>();
+        for (const f of followupCountRows) followupCountByKey.set(`${f.ledger_id}::${f.bill_name}`, Number(f.cnt) || 0);
+
         // Each customer's primary contact (same "primary_contact='Yes' wins,
         // else earliest" rule used across the CRM) — used as the followup
         // modal's default Person Name/Number when no bill-specific one has
@@ -2307,6 +2333,7 @@ export class VouchersService implements OnModuleInit {
                     followup_phone:  followup?.phone_number || null,
                     followup_next_date: followup?.next_date || null,
                     followup_remark: followup?.remark || null,
+                    followup_count: followupCountByKey.get(`${b.ledger_id}::${b.bill_name || ''}`) || 0,
                     customer_person: contact?.person || null,
                     customer_mobile: contact?.mobile || null,
                     all_contacts: allContactsByCustomer.get(Number(b.ledger_id)) || [],
@@ -2355,7 +2382,32 @@ export class VouchersService implements OnModuleInit {
                 opts.updatedBy || null,
             ],
         );
+        // Append to the interaction log — this is what drives the visible
+        // "how many times was this bill chased" count. Fail-soft: the
+        // latest-state upsert above is the primary write.
+        await this.db.execute(
+            `INSERT INTO bill_followup_history (ledger_id, bill_name, status, person_name, phone_number, next_date, remark, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                opts.ledgerId, opts.billName, opts.status || null,
+                opts.personName || null, opts.phoneNumber || null,
+                opts.nextDate || null, opts.remark || null,
+                opts.updatedBy || null,
+            ],
+        ).catch(() => {});
         return { success: true };
+    }
+
+    /** Full interaction log for one outstanding bill, newest first. */
+    async getBillFollowupHistory(ledgerId: number, billName: string) {
+        return this.db.query<any>(
+            `SELECT status, person_name, phone_number, next_date, remark, updated_by, created_at
+             FROM bill_followup_history
+             WHERE ledger_id = ? AND bill_name = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 200`,
+            [ledgerId, billName],
+        );
     }
 
     /** Tally-style ledger statement for a single ledger.

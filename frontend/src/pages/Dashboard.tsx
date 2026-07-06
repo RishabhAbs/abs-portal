@@ -273,6 +273,20 @@ const Dashboard: React.FC = () => {
     return { activation_today: 0, metrics };
   }, [admin, perf, adminPerf, targetUserFilter, filteredUserPerf]);
 
+  // DEBUG: log raw perf payloads to help diagnose missing MTD/QTD/FY values
+  React.useEffect(() => {
+    try {
+      // eslint-disable-next-line no-console
+      console.debug('Dashboard debug: perf (raw):', perf);
+      // eslint-disable-next-line no-console
+      console.debug('Dashboard debug: adminPerf (raw):', adminPerf);
+      // eslint-disable-next-line no-console
+      console.debug('Dashboard debug: perfForUI (computed):', perfForUI);
+    } catch (e) {
+      // ignore
+    }
+  }, [perf, adminPerf, perfForUI]);
+
   // Unit types: per-user for users; majority-per-category across users for admin.
   // When users in a category disagree on unit (qty vs amount), we pick whichever
   // is used by more plan-holders; default 'qty'.

@@ -212,6 +212,7 @@ export default function StockItemLedger() {
               <th className={`${headCell} text-left`} rowSpan={2}>Particulars</th>
               <th className={`${headCell} text-left w-28`} rowSpan={2}>Vch Type</th>
               <th className={`${headCell} text-left w-24`} rowSpan={2}>Vch No.</th>
+              <th className={`${headCell} text-left w-28`} rowSpan={2}>Vch Date</th>
               <th className={`${headCell} text-center`} colSpan={2}>Opening</th>
               <th className={`${headCell} text-center`} colSpan={2}>Inward</th>
               <th className={`${headCell} text-center`} colSpan={2}>Outward</th>
@@ -230,9 +231,9 @@ export default function StockItemLedger() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={12} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
+              <tr><td colSpan={13} className={`${cell} text-center text-slate-400 py-6`}>Loading…</td></tr>
             ) : pageRows.length === 0 ? (
-              <tr><td colSpan={12} className={`${cell} text-center text-slate-400 py-6`}>No vouchers in this date range</td></tr>
+              <tr><td colSpan={13} className={`${cell} text-center text-slate-400 py-6`}>No vouchers in this date range</td></tr>
             ) : pageRows.map((r, i) => {
               const zebra = i % 2 === 1 ? 'bg-slate-50' : 'bg-white';
               const negativeStock = r.closing_qty < -0.0005;
@@ -250,6 +251,7 @@ export default function StockItemLedger() {
                         className="text-slate-400 hover:text-blue-600 hover:underline">—</button>
                     )}
                   </td>
+                    <td className={`${cell} text-slate-600`}>{displayDate(r.vch_date)}</td>
                   <td className={cellNum + ' text-slate-700'}>{r.opening_qty !== 0 ? fmtQty(r.opening_qty) : <span className="text-slate-300">—</span>}</td>
                   <td className={cellNum + ' text-slate-600'}>{r.opening_value !== 0 ? fmt(r.opening_value) : <span className="text-slate-300">—</span>}</td>
                   <td className={cellNum + ' text-emerald-700'}>{r.inward_qty !== 0 ? fmtQty(r.inward_qty) : <span className="text-slate-300">—</span>}</td>
@@ -265,7 +267,7 @@ export default function StockItemLedger() {
           {rows.length > 0 && (
             <tfoot>
               <tr className="bg-slate-200 font-bold sticky bottom-0">
-                <td colSpan={4} className={`${cell} text-slate-700`}>Opening / Closing ({rows.length} vouchers)</td>
+                <td colSpan={5} className={`${cell} text-slate-700`}>Opening / Closing ({rows.length} vouchers)</td>
                 <td className={cellNum + ' text-slate-700'}>{fmtQty(opening.qty)}</td>
                 <td className={cellNum + ' text-slate-700'}>{fmt(opening.value)}</td>
                 <td className={cell} />

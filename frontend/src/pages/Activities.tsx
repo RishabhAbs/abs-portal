@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import { useData, Activity } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
-import { activitiesApi, customersApi, serversApi, mappingsApi } from '../services/api';
+import { activitiesApi, customersApi, serversApi, mappingsApi, vchTypeApi } from '../services/api';
 import { formatDate, toLocalDateString, getISTDateParts, getDaysInMonth, getSafeISTDate } from '../utils/dateUtils';
 import { calculateNextActivityConfig } from '../utils/renewalUtils';
 import PaginationControls from '../components/Shared/PaginationControls';
@@ -248,6 +248,29 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [editing, setEditing] = useState<Activity | null>(null);
   const [renewMode, setRenewMode] = useState<'billing' | 'purchase' | null>(null);
+
+  // Voucher type for the auto-created invoice (Sales children only).
+  // Defaults to "Cloud Billing" — falls back to "Tax Invoice" if missing.
+  const [salesVchTypes, setSalesVchTypes] = useState<{ id: number; name: string }[]>([]);
+  const [voucherTypeId, setVoucherTypeId] = useState<number | ''>('');
+  useEffect(() => {
+    vchTypeApi.getAll()
+      .then(res => {
+        if (!res.success) return;
+        const all = res.data || [];
+        const sales = all.find((t: any) => t.name?.toLowerCase() === 'sales');
+        if (!sales) return;
+        const children = all.filter((t: any) => t.parent_id === sales.id && t.id !== sales.id);
+        setSalesVchTypes(children);
+      })
+      .catch(() => { /* dropdown just stays hidden */ });
+  }, []);
+  useEffect(() => {
+    if (!showModal || editing) return;
+    const def = salesVchTypes.find(t => t.name.toLowerCase() === 'cloud billing')
+      ?? salesVchTypes.find(t => t.name.toLowerCase() === 'tax invoice');
+    setVoucherTypeId(def?.id ?? '');
+  }, [showModal, editing, salesVchTypes]);
   const [serverSearch, setServerSearch] = useState('');
   const [showServerDropdown, setShowServerDropdown] = useState(false);
   const [currentPlanDetails, setCurrentPlanDetails] = useState<any>(null);
@@ -1633,10 +1656,14 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
         await activitiesApi.update(editing.id, safeForm);
         showSuccess('Updated', 'Activity updated successfully');
       } else {
-        const res: any = await activitiesApi.create(safeForm);
+        const res: any = await activitiesApi.create({
+          ...safeForm,
+          // Which Sales-family voucher type the auto-invoice should use
+          voucher_type_id: voucherTypeId || undefined,
+        } as any);
         const created = res?.data;
         if (created?.auto_invoice_created) {
-          showSuccess('Added', `Activity created — Tax Invoice ${created.voucher_no || ''} auto-generated`.trim());
+          showSuccess('Added', `Activity created — invoice ${created.voucher_no || ''} auto-generated`.trim());
         } else if (created?.auto_invoice_error) {
           showSuccess('Added', 'Activity created, but the auto-invoice failed — bill it manually.');
           showError('Auto-invoice failed', created.auto_invoice_error);
@@ -2334,6 +2361,20 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                           <option value="Tax Invoice">Tax Invoice</option>
                           <option value="Credit Note">Credit Note</option>
                         </select>
+                        {!editing && form.bill_type === 'Tax Invoice' && salesVchTypes.length > 0 && (
+                          <div className="mt-2">
+                            <label className="block text-xs font-semibold text-gray-600 mb-1">Voucher Type (auto-invoice)</label>
+                            <select
+                              value={voucherTypeId}
+                              onChange={e => setVoucherTypeId(Number(e.target.value) || '')}
+                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                            >
+                              {salesVchTypes.map(t => (
+                                <option key={t.id} value={t.id}>{t.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-600 mb-1">SOF Number (Optional)</label>

@@ -85,6 +85,17 @@ export class DashboardController {
     return { success: true, data };
   }
 
+  @Get('debug-performance')
+  @ApiOperation({ summary: 'Debug: return my-performance plus raw plans and voucher aggregates' })
+  @ApiQuery({ name: 'user', required: false })
+  @ApiQuery({ name: 'fy', required: false })
+  async debugPerformance(@Query('user') user: string, @Query('fy') fy: string, @Request() req: any) {
+    const isAdmin = req.user?.role?.toLowerCase() === 'admin';
+    const userName = isAdmin && user ? user : req.user?.name;
+    const data = await this.dashboardService.getPerformanceDebug(userName, fy);
+    return { success: true, data };
+  }
+
   @Get('admin-performance')
   @ApiOperation({ summary: 'Admin rollup: company + per-category + per-user performance' })
   @ApiQuery({ name: 'fy', required: false })

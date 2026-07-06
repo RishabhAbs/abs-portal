@@ -64,6 +64,13 @@ export class TallyController {
         return this.tallyService.syncSerialNow(body?.serial, req.user?.name || 'system');
     }
 
+    @Get('expiry-call-history')
+    @RequireAnyPermission({ entity: 'expiry_renew_our', action: 'view' }, { entity: 'expiry_renew_not_our', action: 'view' })
+    async getExpiryCallHistory(@Query('serial') serial: string) {
+        const data = await this.tallyService.getExpiryCallHistory(serial);
+        return { success: true, data };
+    }
+
     @Get('serial-history')
     async getSerialHistory(@Query('serial') serial: string, @Query('limit') limit?: string) {
         const data = await this.tallyService.getSerialUpdateHistory(serial, limit ? parseInt(limit) : 50);

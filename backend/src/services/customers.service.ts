@@ -71,6 +71,9 @@ export class CustomersService implements OnModuleInit {
         }
       }
 
+      // Ensure an index exists for ledgergroup for fast lookups
+      await this.db.execute(`ALTER TABLE customer ADD INDEX idx_ledgergroup (ledgergroup)`).catch(() => {});
+
       // Ensure cloud_group_id column exists
       if (!colNames.includes('cloud_group_id')) {
         await this.db.execute(`ALTER TABLE customer ADD COLUMN cloud_group_id VARCHAR(20) DEFAULT NULL`);

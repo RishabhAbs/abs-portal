@@ -211,6 +211,65 @@ export class GroupChangeService implements OnModuleInit {
   }
 
   /**
+   * Set the `ledgergroup` value on all customers that belong to an old cloud user
+   * group. This overwrites the existing `ledgergroup` column (no separate
+   * LedGroup column is used) so downstream reports/readers see the new value.
+   */
+  async transferLedgerGroup(oldGroupId: string, newLedgerGroupId: number, changedBy: string, resellerId?: number | null): Promise<{ transferred: number; resellerUpdated?: number }> {
+    if (!oldGroupId) throw new BadRequestException('Old group id is required');
+    if (!newLedgerGroupId) throw new BadRequestException('Target ledger group id is required');
+
+    // Build selector depending on optional reseller filter
+    let selectorSql = `WHERE cloud_group_id = ?`;
+    const selectorParams: any[] = [oldGroupId];
+    if (resellerId !== undefined && resellerId !== null) {
+      selectorSql += ` AND resellerid = ?`;
+      selectorParams.push(resellerId);
+    }
+
+    // Find customers matching the selector
+    const customers = await this.db.query<any>(`SELECT id, company FROM customer ${selectorSql}`, selectorParams);
+    if (!customers || customers.length === 0) return { transferred: 0 };
+
+    const customerIds = customers.map((c: any) => c.id);
+
+    // Update `ledgergroup` column for these customers (overwrite existing value)
+    const updateParams = [newLedgerGroupId, ...selectorParams];
+    await this.db.execute(`UPDATE customer SET ledgergroup = ? ${selectorSql}`, updateParams);
+
+    let resellerUpdated: number | undefined;
+    // If resellerId provided and you intend to change reseller for these rows to another value,
+    // that would be a separate operation. Current semantics: resellerId acts as a filter, not a target.
+
+    return { transferred: customers.length, resellerUpdated };
+  }
+
+  /**
+   * Return a preview list of customers that would be affected by a
+   * ledger-group transfer for the given oldGroupId. Limited by `limit`.
+   */
+  async previewLedgerGroup(oldGroupId: string, limit: number = 200, resellerId?: number | null): Promise<{ total: number; rows: any[] }> {
+    if (!oldGroupId) return { total: 0, rows: [] };
+    let selectorSql = `WHERE cloud_group_id = ?`;
+    const params: any[] = [oldGroupId];
+    if (resellerId !== undefined && resellerId !== null) {
+      selectorSql += ` AND resellerid = ?`;
+      params.push(resellerId);
+    }
+
+    const rows = await this.db.query<any>(`
+      SELECT id, company, cloud_group_id, ledgergroup, resellerid
+      FROM customer
+      ${selectorSql}
+      ORDER BY company ASC
+      LIMIT ?
+    `, [...params, limit]);
+    // Count total matching selector
+    const cntRow = await this.db.queryOne<any>(`SELECT COUNT(*) AS cnt FROM customer ${selectorSql}`, params);
+    return { total: Number(cntRow?.cnt || rows.length), rows };
+  }
+
+  /**
    * Get change history with pagination — unified feed of group + reseller
    * changes, each tagged with a `change_type` discriminator. The UI uses
    * this to render either "old/new group" or "old/new reseller" per row.

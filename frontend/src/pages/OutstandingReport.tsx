@@ -4,6 +4,7 @@ import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Chevr
 import { vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import BillFollowupModal from '../components/Outstanding/BillFollowupModal';
+import UpdateHistoryModal, { HistoryEntry } from '../components/UpdateHistoryModal';
 
 const fmt = (n: any) =>
   Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -45,6 +46,7 @@ type Bill = {
   followup_phone: string | null;
   followup_next_date: string | null;
   followup_remark: string | null;
+  followup_count: number;
   customer_person: string | null;
   customer_mobile: string | null;
   all_contacts: { person: string | null; mobile: string; is_primary: boolean }[];
@@ -130,6 +132,24 @@ export default function OutstandingReport() {
   const [bills, setBills] = useState<Bill[]>([]);
   const [totals, setTotals] = useState({ receivable: 0, payable: 0 });
   const [followupTarget, setFollowupTarget] = useState<Bill | null>(null);
+
+  // Status-history popup: click a status badge → full interaction log
+  const [historyTarget, setHistoryTarget] = useState<{ title: string } | null>(null);
+  const [historyRows, setHistoryRows] = useState<HistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const openHistory = async (b: Bill) => {
+    setHistoryTarget({ title: `${b.party_name} — ${b.bill_name}` });
+    setHistoryRows([]);
+    setHistoryLoading(true);
+    try {
+      const res = await vouchersApi.getBillFollowupHistory(Number(b.ledger_id), b.bill_name);
+      if (res.success) setHistoryRows((res.data || []).map((r: any) => ({
+        when: r.created_at, status: r.status, person: r.person_name, phone: r.phone_number,
+        next_date: r.next_date, remark: r.remark, by: r.updated_by,
+      })));
+    } catch { /* modal shows empty state */ }
+    finally { setHistoryLoading(false); }
+  };
   const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>(() => {
     try {
       const saved = localStorage.getItem(COLUMNS_KEY);
@@ -229,6 +249,7 @@ export default function OutstandingReport() {
                 followup_phone: b.followup_phone ?? null,
                 followup_next_date: b.followup_next_date ?? null,
                 followup_remark: b.followup_remark ?? null,
+                followup_count: Number(b.followup_count) || 0,
                 customer_person: b.customer_person ?? null,
                 customer_mobile: b.customer_mobile ?? null,
                 all_contacts: b.all_contacts ?? [],
@@ -506,9 +527,11 @@ export default function OutstandingReport() {
                   {b.age_days}d
                 </span>
                 {b.followup_status && (
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${statusBadge(b.followup_status)}`}>
-                    {b.followup_status}
-                  </span>
+                  <button onClick={(e) => { e.stopPropagation(); openHistory(b); }}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${statusBadge(b.followup_status)}`}
+                    title="View update history">
+                    {b.followup_status}{b.followup_count > 0 ? ` ×${b.followup_count}` : ''}
+                  </button>
                 )}
                 {b.reseller_name && (
                   <span className="text-[12px] text-slate-400 truncate">{b.reseller_name}</span>
@@ -613,7 +636,11 @@ export default function OutstandingReport() {
                     {visibleCols.status && (
                       <td className={`${cell} text-center`}>
                         {b.followup_status ? (
-                          <span className={`text-[10.5px] font-bold px-2 py-0.5 rounded-full ${statusBadge(b.followup_status)}`}>{b.followup_status}</span>
+                          <button onClick={(e) => { e.stopPropagation(); openHistory(b); }}
+                            className={`text-[10.5px] font-bold px-2 py-0.5 rounded-full cursor-pointer hover:ring-1 hover:ring-blue-300 ${statusBadge(b.followup_status)}`}
+                            title={`View update history${b.followup_count > 0 ? ` (${b.followup_count})` : ''}`}>
+                            {b.followup_status}{b.followup_count > 0 ? ` ×${b.followup_count}` : ''}
+                          </button>
                         ) : <span className="text-slate-300">—</span>}
                       </td>
                     )}
@@ -759,6 +786,17 @@ export default function OutstandingReport() {
             remark: followupTarget.followup_remark,
             contacts: followupTarget.all_contacts,
           }}
+        />
+      )}
+
+      {historyTarget && (
+        <UpdateHistoryModal
+          isOpen={true}
+          onClose={() => setHistoryTarget(null)}
+          title={historyTarget.title}
+          subtitle="Payment followup history — newest first"
+          loading={historyLoading}
+          entries={historyRows}
         />
       )}
     </div>

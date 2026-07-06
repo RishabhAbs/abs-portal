@@ -46,6 +46,28 @@ export class GroupChangeController {
     return { success: true, ...result, message: `${result.transferred} customers transferred` };
   }
 
+  @Post('transfer-ledger-group')
+  @RequirePermission('group_change', 'edit_group')
+  async transferLedgerGroup(@Body() body: { oldGroupId: string; newLedgerGroupId: number; resellerId?: number | null }, @Request() req: any) {
+    const changedBy = req.user?.name || 'Unknown';
+    const result = await this.groupChangeService.transferLedgerGroup(
+      body.oldGroupId,
+      body.newLedgerGroupId,
+      changedBy,
+      body.resellerId ?? null
+    );
+    const msg = `${result.transferred} customers updated${result.resellerUpdated ? `; ${result.resellerUpdated} resellers updated` : ''}`;
+    return { success: true, ...result, message: msg };
+  }
+
+  @Get('preview-ledger-group')
+  @RequirePermission('group_change', 'view')
+  async previewLedgerGroup(@Query('oldGroupId') oldGroupId: string, @Query('limit') limit: string = '200', @Query('resellerId') resellerId?: string) {
+    const rid = resellerId ? parseInt(resellerId, 10) : undefined;
+    const data = await this.groupChangeService.previewLedgerGroup(oldGroupId, parseInt(limit, 10) || 200, rid);
+    return { success: true, ...data };
+  }
+
   @Get('resellers')
   @RequirePermission('group_change', 'view')
   async getResellers() {

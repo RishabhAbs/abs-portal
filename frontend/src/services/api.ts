@@ -2,14 +2,21 @@
 // Version 2.3 - Capacitor production support
 console.log('%c[API SERVICE] v2.3 Initialized', 'color: blue; font-weight: bold;');
 const host = window.location.hostname;
+const port = window.location.port;
 const isCapacitor = !!(window as any).Capacitor?.isNativePlatform?.();
-const API_BASE = process.env.REACT_APP_API_URL || (
-  isCapacitor
-    ? 'https://cloud.abstechnologies.co.in/api'
-    : (host === 'localhost' || host === '127.0.0.1')
-      ? 'http://127.0.0.1:5000/api'
-      : '/api'
-);
+// Resolve API base with robust local-dev detection. Prefer explicit env var when set.
+let API_BASE = process.env.REACT_APP_API_URL || '';
+if (!API_BASE) {
+  if (isCapacitor) {
+    API_BASE = 'https://cloud.abstechnologies.co.in/api';
+  } else if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || port === '3000') {
+    // Local dev: call backend on port 5000 (default NestJS dev port)
+    API_BASE = 'http://127.0.0.1:5000/api';
+  } else {
+    API_BASE = '/api';
+  }
+}
+console.info('[API] Resolved API_BASE =', API_BASE, 'host=', host, 'port=', port);
 
 // ── Debug Log System ──
 const DEBUG_LOG_KEY = 'abs_debug_logs';
@@ -100,8 +107,17 @@ async function fetchApi<T>(
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Request failed' }));
-
+    let error: any = { message: 'Request failed' };
+    try {
+      error = await response.json();
+    } catch {
+      try {
+        const txt = await response.text();
+        error = { message: txt };
+      } catch {
+        error = { message: 'Request failed' };
+      }
+    }
     // Auto-logout on session expiry (401) — except for login/auth endpoints
     if (response.status === 401 && !endpoint.includes('/auth/login')) {
       const currentPath = window.location.pathname;
@@ -297,6 +313,15 @@ export const groupChangeApi = {
     }),
   getHistory: (page: number = 1, limit: number = 50, search: string = '') =>
     fetchApi<{ success: boolean; data: any[]; total: number }>(`/group-change/history?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}`),
+  // Ledger group transfer helpers
+  getLedgerGroups: () => fetchApi<{ success: boolean; data: any[] }>(`/ledger-groups`),
+  transferLedgerGroup: (oldGroupId: string, newLedgerGroupId: number, resellerId?: number | null) =>
+    fetchApi<{ success: boolean; transferred: number; resellerUpdated?: number; message: string }>('/group-change/transfer-ledger-group', {
+      method: 'POST',
+      body: JSON.stringify({ oldGroupId, newLedgerGroupId, resellerId }),
+    }),
+  previewLedgerGroup: (oldGroupId: string, limit: number = 200, resellerId?: number | null) =>
+    fetchApi<{ success: boolean; total: number; rows: any[] }>(`/group-change/preview-ledger-group?oldGroupId=${encodeURIComponent(oldGroupId)}&limit=${limit}${resellerId ? `&resellerId=${resellerId}` : ''}`),
 };
 
 // Customers API
@@ -1099,6 +1124,8 @@ export const vouchersApi = {
   upsertBillFollowup: (data: {
     ledger_id: number; bill_name: string; status?: string; person_name?: string; phone_number?: string; next_date?: string; remark?: string;
   }) => fetchApi<{ success: boolean }>('/vouchers/bill-followup', { method: 'POST', body: JSON.stringify(data) }),
+  getBillFollowupHistory: (ledgerId: number, billName: string) =>
+    fetchApi<{ success: boolean; data: any[] }>(`/vouchers/bill-followup/history?ledger_id=${ledgerId}&bill_name=${encodeURIComponent(billName)}`),
   deleteVoucher: (id: number) => fetchApi<{ success: boolean }>(`/vouchers/${id}`, { method: 'DELETE' }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; data: any; message: string }>(`/vouchers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   getNextNo: (vchTypeId: number, forDate?: string) => fetchApi<{ success: boolean; data: string }>(`/vouchers/next-no?vch_type_id=${vchTypeId}${forDate ? `&for_date=${forDate}` : ''}`),
@@ -1193,6 +1220,8 @@ export const tallyApi = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  getExpiryCallHistory: (serial: string) =>
+    fetchApi<{ success: boolean; data: any[] }>(`/tally/expiry-call-history?serial=${encodeURIComponent(serial)}`),
 };
 
 const api = {

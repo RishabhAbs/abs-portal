@@ -124,6 +124,7 @@ const Layout: React.FC = () => {
             { label: 'Pin Code', path: '/pincodes', entity: 'pincodes', icon: <MapPin className="h-4 w-4" /> },
             { label: 'Group Change', path: '/group-change', entity: 'group_change', icon: <UsersIcon className="h-4 w-4" /> },
             { label: 'Reseller', path: '/resellers', entity: 'resellers', icon: <UsersIcon className="h-4 w-4" /> },
+            { label: 'Group Transfer', path: '/group-transfer', entity: 'ledger_groups', icon: <UsersIcon className="h-4 w-4" /> },
             { label: 'Vch Types', path: '/billing/vch-types', entity: 'vch_types' as EntityType, icon: <FileText className="h-4 w-4" /> },
           ]
         },

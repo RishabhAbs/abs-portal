@@ -390,6 +390,22 @@ export class VouchersController {
         return { success: true, data };
     }
 
+    @Get('bill-followup/history')
+    @ApiOperation({ summary: 'Full followup interaction log for one outstanding bill' })
+    @RequireAnyPermission(
+        { entity: 'reports_outstanding', action: 'view' },
+        { entity: 'activities', action: 'view' },
+    )
+    async getBillFollowupHistory(
+        @Query('ledger_id') ledgerId: string,
+        @Query('bill_name') billName: string,
+    ) {
+        const id = parseInt(ledgerId, 10);
+        if (!id || !billName) throw new BadRequestException('ledger_id and bill_name are required');
+        const data = await this.vouchersService.getBillFollowupHistory(id, billName);
+        return { success: true, data };
+    }
+
     @Post('bill-followup')
     @ApiOperation({ summary: 'Log/update the payment-followup contact, next date, remark for an outstanding bill' })
     @RequireAnyPermission(
