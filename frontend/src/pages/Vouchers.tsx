@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer, Download } from 'lucide-react';
-import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi, ledgerGroupApi } from '../services/api';
+import { Plus, X, Save, UserPlus, Eye, EyeOff, ChevronDown, ArrowLeft, Trash2, Printer, Download, Share2, Mail, MessageCircle, MessageSquare } from 'lucide-react';
+import { itemsApi, customersApi, vouchersApi, otherLedgerApi, vchTypeApi, activitiesApi, leadRequirementsApi, ledgerGroupApi, getApiOrigin } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
 
@@ -436,6 +436,65 @@ const Vouchers: React.FC = () => {
     iframe.src = `/billing/print-voucher/${id}?download=1`;
     document.body.appendChild(iframe);
     setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
+  };
+
+  // ── Share via Email / WhatsApp / SMS ──
+  // The print page renders the invoice in a hidden iframe (?share=1),
+  // produces the PDF, uploads it, and posts the public token back here.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState<null | 'email' | 'whatsapp' | 'sms'>(null);
+  const requestSharePdf = (vid: number) => new Promise<{ token: string; public_path: string }>((resolve, reject) => {
+    const iframe = document.createElement('iframe');
+    // Real (offscreen) size so html2canvas renders the invoice properly
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:900px;height:1200px;border:none;';
+    const cleanup = () => { window.removeEventListener('message', onMsg); try { document.body.removeChild(iframe); } catch {} };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Timed out preparing the PDF')); }, 45000);
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (!d || Number(d.voucherId) !== Number(vid)) return;
+      if (d.type === 'voucher-share-ready') { clearTimeout(timer); cleanup(); resolve({ token: d.token, public_path: d.public_path }); }
+      else if (d.type === 'voucher-share-error') { clearTimeout(timer); cleanup(); reject(new Error(d.message || 'Failed to prepare PDF')); }
+    };
+    window.addEventListener('message', onMsg);
+    iframe.src = `/billing/print-voucher/${vid}?share=1`;
+    document.body.appendChild(iframe);
+  });
+
+  const handleShare = async (mode: 'email' | 'whatsapp' | 'sms', vid: number) => {
+    setShareOpen(false);
+    setShareBusy(mode);
+    try {
+      const { token, public_path } = await requestSharePdf(vid);
+      if (mode === 'email') {
+        const res = await vouchersApi.shareVoucherEmail(vid, { token });
+        showSuccess('Email sent', `Voucher emailed to ${res.sent_to}`);
+        return;
+      }
+      const sum = await vouchersApi.getShareSummary(vid);
+      const s = sum.data;
+      const digitsRaw = String(s.party_mobile || '').replace(/\D/g, '');
+      if (!digitsRaw) {
+        showError('No mobile number', `No registered mobile found for ${s.party_name || 'this customer'} — add one on the Customers page.`);
+        return;
+      }
+      const digits = digitsRaw.length === 10 ? `91${digitsRaw}` : digitsRaw;
+      const link = `${getApiOrigin()}${public_path}`;
+      const dateStr = s.vch_date ? new Date(s.vch_date).toLocaleDateString('en-GB') : '';
+      const msg = `Dear ${s.contact_person || s.party_name || 'Customer'},\n` +
+        `Your ${s.vch_type}${s.vch_no ? ` ${s.vch_no}` : ''}${dateStr ? ` dated ${dateStr}` : ''} ` +
+        `for Rs.${Number(s.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} from ABS Technologies.\n` +
+        `Download / view PDF: ${link}`;
+      if (mode === 'whatsapp') {
+        window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank');
+      } else {
+        window.location.href = `sms:+${digits}?body=${encodeURIComponent(msg)}`;
+      }
+    } catch (e: any) {
+      showError('Share failed', e?.message || 'Could not share the voucher');
+    } finally {
+      setShareBusy(null);
+    }
   };
 
   // --- Print States ---
@@ -2753,6 +2812,22 @@ const Vouchers: React.FC = () => {
               </button>
             </div>
           )}
+          {isSalesType && partyId && lines.some(l => l.product_id) && editId && (
+            <div className="flex gap-2 mb-2">
+              <button type="button" disabled={!!shareBusy} onClick={() => handleShare('email', editId!)}
+                className="flex-1 bg-blue-50 border border-blue-200 text-blue-700 text-sm font-semibold py-3 rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60">
+                <Mail size={15} /> {shareBusy === 'email' ? 'Sending…' : 'Email'}
+              </button>
+              <button type="button" disabled={!!shareBusy} onClick={() => handleShare('whatsapp', editId!)}
+                className="flex-1 bg-green-50 border border-green-200 text-green-700 text-sm font-semibold py-3 rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60">
+                <MessageCircle size={15} /> {shareBusy === 'whatsapp' ? 'Preparing…' : 'WhatsApp'}
+              </button>
+              <button type="button" disabled={!!shareBusy} onClick={() => handleShare('sms', editId!)}
+                className="flex-1 bg-orange-50 border border-orange-200 text-orange-700 text-sm font-semibold py-3 rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60">
+                <MessageSquare size={15} /> {shareBusy === 'sms' ? 'Preparing…' : 'SMS'}
+              </button>
+            </div>
+          )}
           <button type="button"
             onClick={handleSubmit}
             disabled={submitting || readOnly}
@@ -2877,6 +2952,32 @@ const Vouchers: React.FC = () => {
               title="Download PDF">
               <Download size={12} /> Download
             </button>
+            <div className="relative inline-block ml-1">
+              <button type="button"
+                onClick={() => setShareOpen(o => !o)}
+                disabled={!!shareBusy}
+                className="inline-flex items-center gap-1 text-xs font-medium text-purple-700 border border-purple-300 bg-purple-50 hover:bg-purple-100 disabled:opacity-60 rounded px-2.5 py-1"
+                title="Share voucher with the customer">
+                <Share2 size={12} /> {shareBusy ? 'Sharing…' : 'Share'}
+              </button>
+              {shareOpen && !shareBusy && (
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-40 w-44 py-1"
+                  onMouseLeave={() => setShareOpen(false)}>
+                  <button type="button" onClick={() => handleShare('email', editId!)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 text-left">
+                    <Mail size={13} className="text-blue-600" /> Email (PDF attached)
+                  </button>
+                  <button type="button" onClick={() => handleShare('whatsapp', editId!)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-green-50 text-left">
+                    <MessageCircle size={13} className="text-green-600" /> WhatsApp (PDF link)
+                  </button>
+                  <button type="button" onClick={() => handleShare('sms', editId!)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-orange-50 text-left">
+                    <MessageSquare size={13} className="text-orange-600" /> SMS (PDF link)
+                  </button>
+                </div>
+              )}
+            </div>
           </>)}
         </div>
 

@@ -430,6 +430,44 @@ export default function PrintVoucher() {
     }
   }, [voucher, searchParams]);
 
+  // Share mode (?share=1): render → PDF blob → upload to the backend →
+  // hand the public token back to the opener (the Vouchers page runs this
+  // page in a hidden iframe and waits for the message).
+  const shareRanRef = useRef(false);
+  useEffect(() => {
+    if (searchParams.get('share') !== '1' || !voucher || !invoiceRef.current || shareRanRef.current) return;
+    shareRanRef.current = true;
+    const invoiceEl = invoiceRef.current;
+    (async () => {
+      try {
+        const html2pdf = (await import('html2pdf.js')).default;
+        const blob: Blob = await html2pdf()
+          .set({
+            margin: 0,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, logging: false },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          })
+          .from(invoiceEl)
+          .outputPdf('blob');
+        const { vouchersApi: va } = await import('../services/api');
+        const res = await va.uploadSharePdf(Number(voucher.id), blob);
+        window.parent?.postMessage({
+          type: 'voucher-share-ready',
+          voucherId: Number(voucher.id),
+          token: res.data.token,
+          public_path: res.data.public_path,
+        }, window.location.origin);
+      } catch (e: any) {
+        window.parent?.postMessage({
+          type: 'voucher-share-error',
+          voucherId: Number(voucher?.id),
+          message: e?.message || 'Failed to prepare voucher PDF',
+        }, window.location.origin);
+      }
+    })();
+  }, [voucher, searchParams]);
+
   // Bill-To customer search — typeahead that lets the user override the
   // voucher's party with any customer in the system. On pick we fetch the
   // full record and overwrite every Bill To field so the address / GST /

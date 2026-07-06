@@ -38,6 +38,8 @@ import { GroupChangeController } from './controllers/group-change.controller';
 import { GroupChangeService } from './services/group-change.service';
 import { VouchersController } from './controllers/vouchers.controller';
 import { VouchersService } from './services/vouchers.service';
+import { VoucherShareController, PublicVoucherPdfController } from './controllers/voucher-share.controller';
+import { VoucherShareService } from './services/voucher-share.service';
 import { ItemsController } from './controllers/items.controller';
 import { ItemsService } from './services/items.service';
 import { LedgerGroupController } from './controllers/ledger-group.controller';
@@ -107,6 +109,8 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     LeadRequirementsController,
     GroupChangeController,
     VouchersController,
+    VoucherShareController,
+    PublicVoucherPdfController,
     ItemsController,
     LedgerGroupController,
     OtherLedgerController,
@@ -143,6 +147,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     LeadRequirementsService,
     GroupChangeService,
     VouchersService,
+    VoucherShareService,
     ItemsService,
     LedgerGroupService,
     OtherLedgerService,

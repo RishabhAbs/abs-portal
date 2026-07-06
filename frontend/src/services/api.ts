@@ -1137,7 +1137,28 @@ export const vouchersApi = {
   }) => fetchApi<{ success: boolean; data: { changed: { id: number; old: string; new: string }[]; skipped: { id: number; vch_no: string }[] } }>(
     '/vouchers/retrofit-numbering', { method: 'POST', body: JSON.stringify(params) },
   ),
+  // ── Share (Email / WhatsApp / SMS) ──
+  uploadSharePdf: async (id: number, pdfBlob: Blob) => {
+    const fd = new FormData();
+    fd.append('file', pdfBlob, `voucher-${id}.pdf`);
+    const token = getToken();
+    const res = await fetch(`${API_BASE}/vouchers/${id}/share-pdf`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd,
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) throw new Error(json.message || 'Failed to upload voucher PDF');
+    return json as { success: boolean; data: { token: string; public_path: string } };
+  },
+  shareVoucherEmail: (id: number, data: { token: string; to?: string }) =>
+    fetchApi<{ success: boolean; sent_to: string }>(`/vouchers/${id}/share-email`, { method: 'POST', body: JSON.stringify(data) }),
+  getShareSummary: (id: number) =>
+    fetchApi<{ success: boolean; data: { vch_no: string | null; vch_date: string | null; vch_type: string; amount: number; party_name: string | null; party_email: string | null; party_mobile: string | null; contact_person: string | null } }>(`/vouchers/${id}/share-summary`),
 };
+
+/** Absolute backend origin for building public (shareable) links. */
+export const getApiOrigin = () => API_BASE.replace(/\/api\/?$/, '') || window.location.origin;
 
 export const attendanceApi = {
   checkIn: (lat: number, lng: number) => fetchApi<{ success: boolean; message: string; office: string }>('/attendance/checkin', {
