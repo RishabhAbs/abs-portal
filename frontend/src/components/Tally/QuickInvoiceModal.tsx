@@ -31,7 +31,11 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
     // filled in — one unit per serial, same model as the full Voucher form.
     const [serials, setSerials] = useState<string[]>(['']);
 
-    const [taxInvoiceType, setTaxInvoiceType] = useState<{ id: number } | null>(null);
+    // Sales-family voucher types the invoice can be filed under. Defaults
+    // to "Tally Billing" (this popup bills Tally serial renewals), falling
+    // back to "Tax Invoice" until that type exists.
+    const [vchTypes, setVchTypes] = useState<{ id: number; name: string }[]>([]);
+    const [vchTypeId, setVchTypeId] = useState<number | ''>('');
     const [suggestedVchNo, setSuggestedVchNo] = useState('');
     const [isIgst, setIsIgst] = useState(false);
 
@@ -66,15 +70,21 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
                     }
                 }
 
-                const taxInvoice = typesRes.success
-                    ? (typesRes.data || []).find((t: any) => t.name.toLowerCase() === 'tax invoice')
-                    : null;
-                if (taxInvoice) {
-                    setTaxInvoiceType({ id: taxInvoice.id });
-                    const noRes = await vouchersApi.getNextNo(taxInvoice.id, today);
+                const allTypes = typesRes.success ? (typesRes.data || []) : [];
+                const sales = allTypes.find((t: any) => t.name?.toLowerCase() === 'sales');
+                const children = sales
+                    ? allTypes.filter((t: any) => t.parent_id === sales.id && t.id !== sales.id)
+                    : [];
+                setVchTypes(children);
+                const def = children.find((t: any) => t.name.toLowerCase() === 'tally billing')
+                    ?? children.find((t: any) => t.name.toLowerCase() === 'tax invoice')
+                    ?? children[0];
+                if (def) {
+                    setVchTypeId(def.id);
+                    const noRes = await vouchersApi.getNextNo(def.id, today);
                     if (noRes.success) setSuggestedVchNo(noRes.data || '');
                 } else {
-                    showError('Setup missing', 'No "Tax Invoice" voucher type found under Sales — set it up in Vch Types first.');
+                    showError('Setup missing', 'No voucher types found under Sales — set one up in Vch Types first.');
                 }
 
                 if (customerRes?.success && customerRes.data) {
@@ -97,6 +107,18 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, data.customerId]);
+
+    // Switching the voucher type pulls that type's own next number, so the
+    // header chip always previews the series the invoice will actually use.
+    const handlePickVchType = async (id: number) => {
+        setVchTypeId(id);
+        setSuggestedVchNo('');
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            const noRes = await vouchersApi.getNextNo(id, today);
+            if (noRes.success) setSuggestedVchNo(noRes.data || '');
+        } catch { /* chip just shows Manual no. */ }
+    };
 
     const selectedItem = useMemo(() => items.find(i => String(i.id) === itemId), [items, itemId]);
 
@@ -143,7 +165,7 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!taxInvoiceType) { showError('Setup missing', 'No "Tax Invoice" voucher type found.'); return; }
+        if (!vchTypeId) { showError('Setup missing', 'Select a voucher type.'); return; }
         if (!itemId) { showError('Validation', 'Select an item.'); return; }
         if (rate <= 0) { showError('Validation', 'Enter a rate.'); return; }
         if (isBatchItem) {
@@ -164,7 +186,7 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
         try {
             const today = new Date().toISOString().split('T')[0];
             const res: any = await vouchersApi.create({
-                vch_type_id: taxInvoiceType.id,
+                vch_type_id: vchTypeId,
                 vch_no: suggestedVchNo || undefined,
                 vch_date: today,
                 party_ledger_id: data.customerId,
@@ -256,6 +278,19 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
                 ) : (
                     <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
                         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                            <div className="space-y-1">
+                                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-tight ml-1">Voucher Type</label>
+                                <select
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all outline-none text-sm"
+                                    value={vchTypeId}
+                                    onChange={e => handlePickVchType(Number(e.target.value))}
+                                >
+                                    {vchTypes.map(t => (
+                                        <option key={t.id} value={t.id}>{t.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
                             <div className="space-y-1">
                                 <label className="text-[11px] font-bold text-gray-500 uppercase tracking-tight ml-1">Item</label>
                                 <select

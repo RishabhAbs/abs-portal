@@ -2624,11 +2624,30 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                           </div>
                         )}
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                          <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Activity Date</label><DateInput value={form.activity_date} onChange={val => setForm(prev => ({ ...prev, activity_date: val, start_from: val, purchase_start_from: val }))} className="w-full py-1 text-sm border-gray-300 rounded-md" /></div>
-                          <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Bill Type</label><select value={form.bill_type} onChange={e => { const t = e.target.value as any; setForm(prev => ({ ...prev, bill_type: t, billing_units: t === 'Credit Note' ? -Math.abs(Number(prev.billing_units)) : Math.abs(Number(prev.billing_units)), purchase_units: t === 'Credit Note' ? -Math.abs(Number(prev.purchase_units)) : Math.abs(Number(prev.purchase_units)) })); }} className="w-full px-2 py-1 bg-white border border-gray-200 rounded-lg text-sm"><option>Tax Invoice</option><option>Credit Note</option></select></div>
-                          <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">SOF No (Optional)</label><input type="text" value={form.sof_no} onChange={e => setForm({ ...form, sof_no: e.target.value })} placeholder="Enter SOF..." className="w-full px-2 py-1 bg-white border border-gray-200 rounded-lg text-sm" /></div>
-                        </div>
+                        {(() => {
+                          const showVt = !editing && form.bill_type === 'Tax Invoice' && form.is_sales && salesVchTypes.length > 0;
+                          // One row: Activity Date | Voucher Type | Bill Type | SOF —
+                          // all controls share the same h-9 height so nothing wraps
+                          // or looks mismatched.
+                          const ctl = 'w-full px-2 bg-white border border-gray-200 rounded-lg text-sm h-9';
+                          return (
+                            <div className={`grid grid-cols-1 gap-2 ${showVt ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+                              <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Activity Date</label><DateInput value={form.activity_date} onChange={val => setForm(prev => ({ ...prev, activity_date: val, start_from: val, purchase_start_from: val }))} className="w-full text-sm border-gray-300 rounded-lg h-9" /></div>
+                              {showVt && (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Voucher Type</label>
+                                  <select value={voucherTypeId} onChange={e => setVoucherTypeId(Number(e.target.value) || '')} className={ctl}>
+                                    {salesVchTypes.map(t => (
+                                      <option key={t.id} value={t.id}>{t.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                              <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Bill Type</label><select value={form.bill_type} onChange={e => { const t = e.target.value as any; setForm(prev => ({ ...prev, bill_type: t, billing_units: t === 'Credit Note' ? -Math.abs(Number(prev.billing_units)) : Math.abs(Number(prev.billing_units)), purchase_units: t === 'Credit Note' ? -Math.abs(Number(prev.purchase_units)) : Math.abs(Number(prev.purchase_units)) })); }} className={ctl}><option>Tax Invoice</option><option>Credit Note</option></select></div>
+                              <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">SOF No (Optional)</label><input type="text" value={form.sof_no} onChange={e => setForm({ ...form, sof_no: e.target.value })} placeholder="Enter SOF..." className={ctl} /></div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* BILLING ACTIVITY */}
