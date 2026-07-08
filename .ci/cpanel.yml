@@ -1,0 +1,34 @@
+---
+# cPanel Git Version Control deployment recipe.
+# Runs on the server when cPanel deploys the `deploy` branch. The deploy branch
+# is produced by GitHub Actions and looks like:
+#   ├── public/    (built frontend + .htaccess)
+#   └── backend/   (dist + package.json + package-lock.json)
+#
+# It does NOT build anything — only copies prebuilt files into place and
+# restarts the backend. Server-side secrets (.env, ecosystem.config.js) are
+# NEVER overwritten.
+deployment:
+  tasks:
+    # ── EDIT THESE TWO PATHS if your layout differs ──────────────────────────
+    # WEBROOT  = where the frontend/SPA is served from (the domain doc-root)
+    # BACKEND  = where the NestJS app + PM2 live (kept inside the web root here,
+    #            matching the manual-zip layout: <docroot>/backend)
+    - export WEBROOT="$HOME/public_html"
+    - export BACKEND="$HOME/public_html/backend"
+
+    # ── Frontend → web root (add/overwrite; does not delete unrelated files) ──
+    - /usr/bin/rsync -a public/ "$WEBROOT/"
+
+    # ── Backend → app dir, preserving .env, ecosystem.config.js, node_modules ─
+    - /bin/mkdir -p "$BACKEND"
+    - /usr/bin/rsync -a --exclude='.env' --exclude='ecosystem.config.js' --exclude='node_modules' backend/ "$BACKEND/"
+
+    # ── Install prod deps only when the lockfile changed (npm ci is cheap-ish) ─
+    - cd "$BACKEND" && npm install --omit=dev --no-audit --no-fund
+
+    # ── Restart the backend under PM2 (reload = zero-downtime; start if new) ──
+    # NOTE: if `pm2` is not found here, replace `pm2` below with its full path,
+    # e.g. "$HOME/.npm-global/bin/pm2" or the path shown by `which pm2` in the
+    # cPanel Terminal.
+    - cd "$BACKEND" && (pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js) && pm2 save
