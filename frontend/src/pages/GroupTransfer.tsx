@@ -61,9 +61,10 @@ export default function GroupTransfer() {
   const groupLabel = (g: any) => `${g.type === 'group' ? 'Group' : 'Cloud'}: ${g.name}${g.cnt != null ? ` (${g.cnt})` : ''}`;
 
   const handleSubmit = async () => {
-    if (!oldGroupId) return showError('Validation', 'Select old group');
+    if (!oldGroupId && !resellerId) return showError('Validation', 'Select an old group or a reseller');
     if (!newLedgerGroupId) return showError('Validation', 'Select destination ledger group');
-    if (!window.confirm('Proceed with transferring ledgers from selected old group to the new ledger group?')) return;
+    const scope = oldGroupId ? 'the selected old group' : 'the selected reseller';
+    if (!window.confirm(`Proceed with transferring ledgers for ${scope} to the new ledger group?`)) return;
     setSubmitting(true);
     try {
       const res = await groupChangeApi.transferLedgerGroup(oldGroupId, Number(newLedgerGroupId), resellerId ? Number(resellerId) : null, oldGroupType);
@@ -90,7 +91,7 @@ export default function GroupTransfer() {
   useEffect(() => { loadCustomers(1, custLimit, custSearch); }, []);
 
   const handlePreview = async () => {
-    if (!oldGroupId) return showError('Validation', 'Select old group');
+    if (!oldGroupId && !resellerId) return showError('Validation', 'Select an old group or a reseller');
     setPreviewLoading(true);
     try {
       const res = await groupChangeApi.previewLedgerGroup(oldGroupId, 500, resellerId ? Number(resellerId) : undefined, oldGroupType);
