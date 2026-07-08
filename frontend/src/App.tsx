@@ -145,7 +145,7 @@ function App() {
                   <Route path="activity" element={<Navigate to="billing" replace />} />
                   <Route path="activity/billing" element={<PermissionGuard entity="activities"><Activity viewMode="sales" /></PermissionGuard>} />
                   <Route path="activity/purchase" element={<PermissionGuard entity="activities"><Activity viewMode="purchase" /></PermissionGuard>} />
-                  <Route path="monitor" element={<PermissionGuard entity="mappings"><ServerMonitor /></PermissionGuard>} />
+                  <Route path="monitor" element={<PermissionGuard entity="server_monitor"><ServerMonitor /></PermissionGuard>} />
                 </Route>
 
                 {/* Legacy Redirects */}
@@ -184,7 +184,7 @@ function App() {
                 <Route path="customers" element={<PermissionGuard entity={['customers_our', 'customers_not_our']}><Customers /></PermissionGuard>} />
                 <Route path="customers/inactive" element={<PermissionGuard adminOnly><InactiveCustomers /></PermissionGuard>} />
                 <Route path="group-change" element={<PermissionGuard entity="group_change"><GroupChangeReport /></PermissionGuard>} />
-                <Route path="group-transfer" element={<PermissionGuard entity="ledger_groups"><GroupTransfer /></PermissionGuard>} />
+                <Route path="group-transfer" element={<PermissionGuard entity="group_transfer"><GroupTransfer /></PermissionGuard>} />
                 <Route path="resellers" element={<PermissionGuard entity="resellers"><Reseller /></PermissionGuard>} />
                 {/* Service Module */}
                 <Route path="service">
@@ -214,8 +214,8 @@ function App() {
                   <Route path="vouchers/edit/:id" element={<PermissionGuard entity={['vouchers', 'reports_outstanding', 'reports_ledger', 'reports_daybook']}><Vouchers /></PermissionGuard>} />
                   <Route path="daybook" element={<PermissionGuard entity="reports_daybook"><Daybook /></PermissionGuard>} />
                   <Route path="pending-review" element={<PermissionGuard entity={['reports_daybook', 'vouchers']}><PendingReview /></PermissionGuard>} />
-                  <Route path="bill-report" element={<PermissionGuard entity="reports_daybook"><BillReport /></PermissionGuard>} />
-                  <Route path="payment-report" element={<PermissionGuard entity="reports_daybook"><PaymentReport /></PermissionGuard>} />
+                  <Route path="bill-report" element={<PermissionGuard entity="reports_bill_payment"><BillReport /></PermissionGuard>} />
+                  <Route path="payment-report" element={<PermissionGuard entity="reports_bill_payment"><PaymentReport /></PermissionGuard>} />
                   <Route path="items" element={<PermissionGuard entity="items"><Items /></PermissionGuard>} />
                   <Route path="ledger-groups" element={<PermissionGuard entity="ledger_groups"><LedgerGroup /></PermissionGuard>} />
                   <Route path="item-groups" element={<PermissionGuard entity="items"><ItemGroup /></PermissionGuard>} />

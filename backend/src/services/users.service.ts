@@ -57,7 +57,13 @@ export interface UserPermissions {
   reports_group_summary:    { view: boolean };
   reports_stock_summary:    { view: boolean };
   reports_user_outstanding: { view: boolean };
-  server_monitor: { view: boolean; edit: boolean };
+  // Bill Report + Payment Report (Billing module). Their own permission so an
+  // admin can grant these two reports without the broader `activities` perm.
+  reports_bill_payment: { view: boolean; create: boolean; edit: boolean; delete: boolean };
+  server_monitor: { view: boolean; create: boolean; edit: boolean; delete: boolean };
+  // Group Transfer (bulk ledger-group / reseller reassignment). Distinct from
+  // `group_change` so it can be granted independently.
+  group_transfer: { view: boolean; create: boolean; edit: boolean; delete: boolean };
 }
 
 // Column-level permissions: per-page visibility and copy control
@@ -183,7 +189,9 @@ const defaultUserPermissions: UserPermissions = {
   reports_group_summary:    { view: false },
   reports_stock_summary:    { view: false },
   reports_user_outstanding: { view: false },
-  server_monitor: { view: false, edit: false },
+  reports_bill_payment: { view: false, create: false, edit: false, delete: false },
+  server_monitor: { view: false, create: false, edit: false, delete: false },
+  group_transfer: { view: false, create: false, edit: false, delete: false },
 };
 
 const adminPermissions: UserPermissions = {
@@ -221,7 +229,9 @@ const adminPermissions: UserPermissions = {
   reports_group_summary:    { view: true },
   reports_stock_summary:    { view: true },
   reports_user_outstanding: { view: true },
-  server_monitor: { view: true, edit: true },
+  reports_bill_payment: { view: true, create: true, edit: true, delete: true },
+  server_monitor: { view: true, create: true, edit: true, delete: true },
+  group_transfer: { view: true, create: true, edit: true, delete: true },
 };
 
 // Merge stored permissions with defaults so new keys (e.g. service_calls) are always present

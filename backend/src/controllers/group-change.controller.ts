@@ -2,7 +2,7 @@ import { Controller, Get, Post, Query, Body, Request, UseGuards } from '@nestjs/
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { PermissionsGuard } from '../guards/permissions.guard';
-import { RequirePermission } from '../decorators/permissions.decorator';
+import { RequirePermission, RequireAnyPermission } from '../decorators/permissions.decorator';
 import { GroupChangeService } from '../services/group-change.service';
 
 // Group / Reseller Change page. Permissions are split:
@@ -21,9 +21,19 @@ export class GroupChangeController {
   }
 
   @Get('users')
-  @RequirePermission('group_change', 'view')
+  // Shared with Group Transfer page — allow either permission.
+  @RequireAnyPermission({ entity: 'group_change', action: 'view' }, { entity: 'group_transfer', action: 'view' })
   async getUsers() {
     const data = await this.groupChangeService.getUsers();
+    return { success: true, data };
+  }
+
+  // Distinct groupings (cloud + legacy) actually present in the customer table,
+  // used by the Group Transfer "Old Group" dropdown.
+  @Get('customer-groups')
+  @RequireAnyPermission({ entity: 'group_change', action: 'view' }, { entity: 'group_transfer', action: 'view' })
+  async getCustomerGroups() {
+    const data = await this.groupChangeService.getCustomerGroups();
     return { success: true, data };
   }
 
@@ -47,29 +57,31 @@ export class GroupChangeController {
   }
 
   @Post('transfer-ledger-group')
-  @RequirePermission('group_change', 'edit_group')
-  async transferLedgerGroup(@Body() body: { oldGroupId: string; newLedgerGroupId: number; resellerId?: number | null }, @Request() req: any) {
+  @RequireAnyPermission({ entity: 'group_change', action: 'edit_group' }, { entity: 'group_transfer', action: 'edit' })
+  async transferLedgerGroup(@Body() body: { oldGroupId: string; newLedgerGroupId: number; resellerId?: number | null; groupType?: 'cloud' | 'group' }, @Request() req: any) {
     const changedBy = req.user?.name || 'Unknown';
     const result = await this.groupChangeService.transferLedgerGroup(
       body.oldGroupId,
       body.newLedgerGroupId,
       changedBy,
-      body.resellerId ?? null
+      body.resellerId ?? null,
+      body.groupType === 'group' ? 'group' : 'cloud'
     );
     const msg = `${result.transferred} customers updated${result.resellerUpdated ? `; ${result.resellerUpdated} resellers updated` : ''}`;
     return { success: true, ...result, message: msg };
   }
 
   @Get('preview-ledger-group')
-  @RequirePermission('group_change', 'view')
-  async previewLedgerGroup(@Query('oldGroupId') oldGroupId: string, @Query('limit') limit: string = '200', @Query('resellerId') resellerId?: string) {
+  @RequireAnyPermission({ entity: 'group_change', action: 'view' }, { entity: 'group_transfer', action: 'view' })
+  async previewLedgerGroup(@Query('oldGroupId') oldGroupId: string, @Query('limit') limit: string = '200', @Query('resellerId') resellerId?: string, @Query('groupType') groupType?: string) {
     const rid = resellerId ? parseInt(resellerId, 10) : undefined;
-    const data = await this.groupChangeService.previewLedgerGroup(oldGroupId, parseInt(limit, 10) || 200, rid);
+    const gt = groupType === 'group' ? 'group' : 'cloud';
+    const data = await this.groupChangeService.previewLedgerGroup(oldGroupId, parseInt(limit, 10) || 200, rid, gt);
     return { success: true, ...data };
   }
 
   @Get('resellers')
-  @RequirePermission('group_change', 'view')
+  @RequireAnyPermission({ entity: 'group_change', action: 'view' }, { entity: 'group_transfer', action: 'view' })
   async getResellers() {
     const data = await this.groupChangeService.getResellers();
     return { success: true, data };

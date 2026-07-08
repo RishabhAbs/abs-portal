@@ -99,7 +99,7 @@ const Layout: React.FC = () => {
   const cloudItems: NavItem[] = [
     { label: 'Server', path: '/cloud/servers', entity: 'servers', icon: <Server className="h-4 w-4" /> },
     { label: 'Mapping', path: '/cloud/mapping', entity: 'mappings', icon: <Link2 className="h-4 w-4" /> },
-    { label: 'Server Monitor', path: '/cloud/monitor', entity: 'mappings', icon: <Activity className="h-4 w-4" /> },
+    { label: 'Server Monitor', path: '/cloud/monitor', entity: 'server_monitor', icon: <Activity className="h-4 w-4" /> },
     { label: 'Billing Activity', path: '/cloud/activity/billing', entity: 'activities', icon: <FileText className="h-4 w-4" /> },
     { label: 'Purchase Activity', path: '/cloud/activity/purchase', entity: 'activities', icon: <FileText className="h-4 w-4" /> },
   ];
@@ -124,7 +124,7 @@ const Layout: React.FC = () => {
             { label: 'Pin Code', path: '/pincodes', entity: 'pincodes', icon: <MapPin className="h-4 w-4" /> },
             { label: 'Group Change', path: '/group-change', entity: 'group_change', icon: <UsersIcon className="h-4 w-4" /> },
             { label: 'Reseller', path: '/resellers', entity: 'resellers', icon: <UsersIcon className="h-4 w-4" /> },
-            { label: 'Group Transfer', path: '/group-transfer', entity: 'ledger_groups', icon: <UsersIcon className="h-4 w-4" /> },
+            { label: 'Group Transfer', path: '/group-transfer', entity: 'group_transfer', icon: <UsersIcon className="h-4 w-4" /> },
             { label: 'Vch Types', path: '/billing/vch-types', entity: 'vch_types' as EntityType, icon: <FileText className="h-4 w-4" /> },
           ]
         },
@@ -205,8 +205,8 @@ const Layout: React.FC = () => {
         { label: 'Sales Register',       path: '/reports/sales-register',   entity: ['reports_sales_register', 'reports_daybook'] as EntityType[], icon: <Receipt className="h-4 w-4" /> },
         { label: 'Group Summary',        path: '/reports/group-summary',    entity: ['reports_group_summary', 'reports_daybook'] as EntityType[], icon: <Layers className="h-4 w-4" /> },
         { label: 'Stock Summary',        path: '/reports/stock-summary',    entity: ['reports_stock_summary', 'reports_daybook'] as EntityType[], icon: <BarChart2 className="h-4 w-4" /> },
-        { label: 'Bill Report',          path: '/billing/bill-report',      entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
-        { label: 'Payment Report',       path: '/billing/payment-report',   entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
+        { label: 'Bill Report',          path: '/billing/bill-report',      entity: 'reports_bill_payment' as EntityType,     icon: <FileText className="h-4 w-4" /> },
+        { label: 'Payment Report',       path: '/billing/payment-report',   entity: 'reports_bill_payment' as EntityType,     icon: <FileText className="h-4 w-4" /> },
         { label: 'Call Report',          path: '/visit/call-report',        entity: 'call_report' as EntityType,              icon: <PhoneCall className="h-4 w-4" /> },
         { label: 'Task',                 path: '/task-report',              entity: 'tasks' as EntityType,                    icon: <FileText className="h-4 w-4" /> },
         {
@@ -752,8 +752,8 @@ const Layout: React.FC = () => {
                   { label: 'Sales Register',        path: '/reports/sales-register',   entity: 'reports_sales_register' as any, icon: <Receipt className="h-4 w-4" /> },
                   { label: 'Group Summary',         path: '/reports/group-summary',    entity: 'reports_group_summary' as any, icon: <Layers className="h-4 w-4" /> },
                   { label: 'Stock Summary',         path: '/reports/stock-summary',    entity: 'reports_stock_summary' as any, icon: <BarChart2 className="h-4 w-4" /> },
-                  { label: 'Bill Report',           path: '/billing/bill-report',      entity: 'reports_daybook' as any,       icon: <FileText className="h-4 w-4" /> },
-                  { label: 'Payment Report',        path: '/billing/payment-report',   entity: 'reports_daybook' as any,       icon: <FileText className="h-4 w-4" /> },
+                  { label: 'Bill Report',           path: '/billing/bill-report',      entity: 'reports_bill_payment' as any,  icon: <FileText className="h-4 w-4" /> },
+                  { label: 'Payment Report',        path: '/billing/payment-report',   entity: 'reports_bill_payment' as any,  icon: <FileText className="h-4 w-4" /> },
                 ].filter(r => canView(r.entity)).map(r => (
                   <NavLink key={r.path} to={r.path} onClick={() => setShowAccountsSheet(false)}
                     className={({ isActive }) => `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${isActive ? 'bg-red-50 text-red-600 font-semibold' : 'text-gray-700 hover:bg-gray-50'}`}>

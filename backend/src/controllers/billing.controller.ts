@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { BillingService } from '../services/billing.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { PermissionsGuard } from '../guards/permissions.guard';
-import { RequirePermission } from '../decorators/permissions.decorator';
+import { RequirePermission, RequireAnyPermission } from '../decorators/permissions.decorator';
 
 @ApiTags('Billing')
 @Controller('api/billing')
@@ -23,7 +23,8 @@ export class BillingController {
 
   @Get('bills')
   @ApiOperation({ summary: 'List bills with filters' })
-  @RequirePermission('activities', 'view')
+  // Also feeds the standalone Bill Report page.
+  @RequireAnyPermission({ entity: 'activities', action: 'view' }, { entity: 'reports_bill_payment', action: 'view' })
   async getBills(
     @Query('bill_type') bill_type?: string,
     @Query('bill_status') bill_status?: string,
@@ -84,7 +85,8 @@ export class BillingController {
 
   @Get('payments')
   @ApiOperation({ summary: 'List payments' })
-  @RequirePermission('activities', 'view')
+  // Also feeds the standalone Payment Report page.
+  @RequireAnyPermission({ entity: 'activities', action: 'view' }, { entity: 'reports_bill_payment', action: 'view' })
   async getPayments(
     @Query('status') status?: string,
     @Query('search') search?: string,
@@ -97,7 +99,8 @@ export class BillingController {
 
   @Put('payments/:id')
   @ApiOperation({ summary: 'Update a payment' })
-  @RequirePermission('activities', 'edit')
+  // Payment Report page can edit payments with its own permission.
+  @RequireAnyPermission({ entity: 'activities', action: 'edit' }, { entity: 'reports_bill_payment', action: 'edit' })
   async updatePayment(@Param('id') id: string, @Body() body: any) {
     return this.billingService.updatePayment(parseInt(id, 10), body);
   }

@@ -5,7 +5,7 @@ import { startNotificationService, stopNotificationService } from '../services/n
 
 // Types
 export type UserRole = 'admin' | 'user';
-export type EntityType = 'servers' | 'customers_our' | 'customers_not_our' | 'customer_search' | 'mappings' | 'users' | 'activities' | 'tdl' | 'pincodes' | 'visits_our' | 'visits_not_our' | 'tasks' | 'service_calls' | 'leads' | 'service_followup' | 'expiry_renew_our' | 'expiry_renew_not_our' | 'call_report' | 'my_requirements' | 'items' | 'ledger_groups' | 'other_ledgers' | 'vch_types' | 'targets' | 'vouchers' | 'reports_outstanding' | 'reports_ledger' | 'reports_daybook' | 'reports_sales_register' | 'reports_group_summary' | 'reports_stock_summary' | 'reports_user_outstanding' | 'resellers' | 'group_change' | 'server_monitor';
+export type EntityType = 'servers' | 'customers_our' | 'customers_not_our' | 'customer_search' | 'mappings' | 'users' | 'activities' | 'tdl' | 'pincodes' | 'visits_our' | 'visits_not_our' | 'tasks' | 'service_calls' | 'leads' | 'service_followup' | 'expiry_renew_our' | 'expiry_renew_not_our' | 'call_report' | 'my_requirements' | 'items' | 'ledger_groups' | 'other_ledgers' | 'vch_types' | 'targets' | 'vouchers' | 'reports_outstanding' | 'reports_ledger' | 'reports_daybook' | 'reports_sales_register' | 'reports_group_summary' | 'reports_stock_summary' | 'reports_user_outstanding' | 'reports_bill_payment' | 'resellers' | 'group_change' | 'group_transfer' | 'server_monitor';
 
 export interface UserPermissions {
   servers: { view: boolean; create: boolean; edit: boolean; delete: boolean; export: boolean; bulk_renewal: boolean };
@@ -54,7 +54,11 @@ export interface UserPermissions {
   reports_group_summary:    { view: boolean };
   reports_stock_summary:    { view: boolean };
   reports_user_outstanding: { view: boolean };
-  server_monitor: { view: boolean; edit: boolean };
+  // Bill Report + Payment Report — own permission, separate from `activities`.
+  reports_bill_payment: { view: boolean; create: boolean; edit: boolean; delete: boolean };
+  server_monitor: { view: boolean; create: boolean; edit: boolean; delete: boolean };
+  // Group Transfer (bulk ledger-group / reseller reassignment).
+  group_transfer: { view: boolean; create: boolean; edit: boolean; delete: boolean };
 }
 
 // Column-level permissions
@@ -499,8 +503,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       case 'reports_group_summary':    return 'reports_group_summary';
       case 'reports_stock_summary':    return 'reports_stock_summary';
       case 'reports_user_outstanding': return 'reports_user_outstanding';
+      case 'reports_bill_payment':     return 'reports_bill_payment';
       case 'resellers': return 'resellers';
       case 'group_change': return 'group_change';
+      case 'group_transfer': return 'group_transfer';
+      case 'server_monitor': return 'server_monitor';
       default: return 'servers';
     }
   };

@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { LedgerGroupService } from '../services/ledger-group.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { PermissionsGuard } from '../guards/permissions.guard';
-import { RequirePermission } from '../decorators/permissions.decorator';
+import { RequirePermission, RequireAnyPermission } from '../decorators/permissions.decorator';
 
 @ApiTags('Ledger Groups')
 @Controller('api/ledger-groups')
@@ -14,7 +14,8 @@ export class LedgerGroupController {
 
     @Get()
     @ApiOperation({ summary: 'Get all ledger groups' })
-    @RequirePermission('ledger_groups', 'view')
+    // Read-only list is also needed by the Group Transfer page (destination dropdown).
+    @RequireAnyPermission({ entity: 'ledger_groups', action: 'view' }, { entity: 'group_transfer', action: 'view' })
     async findAll() {
         const data = await this.ledgerGroupService.findAll();
         return { success: true, data };

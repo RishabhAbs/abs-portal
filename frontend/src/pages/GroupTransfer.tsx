@@ -10,6 +10,9 @@ export default function GroupTransfer() {
   const [resellers, setResellers] = useState<any[]>([]);
 
   const [oldGroupId, setOldGroupId] = useState<string>('');
+  // Which customer-table column the selected old group maps to:
+  //   'cloud' → cloud_group_id, 'group' → legacy `group`
+  const [oldGroupType, setOldGroupType] = useState<'cloud' | 'group'>('cloud');
   const [newLedgerGroupId, setNewLedgerGroupId] = useState<string>('');
   const [resellerSearch, setResellerSearch] = useState('');
   const [resellerId, setResellerId] = useState<string>('');
@@ -32,8 +35,8 @@ export default function GroupTransfer() {
   const [showOldGroupDropdown, setShowOldGroupDropdown] = useState(false);
 
   useEffect(() => {
-    // Fetch cloud users (old groups), ledger groups and resellers
-    groupChangeApi.getUsers()
+    // Fetch old groups (cloud + legacy, sourced from customer table), ledger groups and resellers
+    groupChangeApi.getCustomerGroups()
       .then(res => setOldGroups(res.data || []))
       .catch(() => showError('Load failed', 'Could not load old groups'));
     groupChangeApi.getLedgerGroups()
@@ -54,13 +57,16 @@ export default function GroupTransfer() {
 
   const filteredResellers = resellers.filter(r => !resellerSearch || (r.name || '').toLowerCase().includes(resellerSearch.toLowerCase()));
 
+  // Label for a combined old-group option: "Cloud: Name (count)" / "Group: Name (count)"
+  const groupLabel = (g: any) => `${g.type === 'group' ? 'Group' : 'Cloud'}: ${g.name}${g.cnt != null ? ` (${g.cnt})` : ''}`;
+
   const handleSubmit = async () => {
     if (!oldGroupId) return showError('Validation', 'Select old group');
     if (!newLedgerGroupId) return showError('Validation', 'Select destination ledger group');
     if (!window.confirm('Proceed with transferring ledgers from selected old group to the new ledger group?')) return;
     setSubmitting(true);
     try {
-      const res = await groupChangeApi.transferLedgerGroup(oldGroupId, Number(newLedgerGroupId), resellerId ? Number(resellerId) : null);
+      const res = await groupChangeApi.transferLedgerGroup(oldGroupId, Number(newLedgerGroupId), resellerId ? Number(resellerId) : null, oldGroupType);
       showSuccess('Done', res.message || `Transferred ${res.transferred || 0}`);
     } catch (err: any) { showError('Error', err.message || 'Transfer failed'); }
     finally { setSubmitting(false); }
@@ -87,7 +93,7 @@ export default function GroupTransfer() {
     if (!oldGroupId) return showError('Validation', 'Select old group');
     setPreviewLoading(true);
     try {
-      const res = await groupChangeApi.previewLedgerGroup(oldGroupId, 500, resellerId ? Number(resellerId) : undefined);
+      const res = await groupChangeApi.previewLedgerGroup(oldGroupId, 500, resellerId ? Number(resellerId) : undefined, oldGroupType);
       setPreviewRows(res.rows || []);
       setPreviewTotal(res.total ?? (res.rows || []).length);
     } catch (err: any) {
@@ -106,19 +112,22 @@ export default function GroupTransfer() {
           <div ref={oldGroupRef} className="relative">
             <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Old Group</label>
             <input
-              value={showOldGroupDropdown ? oldGroupSearch : (oldGroups.find(u => String(u.id) === String(oldGroupId))?.name || (oldGroupId ? `#${oldGroupId}` : '— Select Old Group —'))}
+              value={showOldGroupDropdown ? oldGroupSearch : (() => { const sel = oldGroups.find(u => u.type === oldGroupType && String(u.id) === String(oldGroupId)); return sel ? groupLabel(sel) : (oldGroupId ? `#${oldGroupId}` : '— Select Old Group —'); })()}
               onChange={e => { setOldGroupSearch(e.target.value); setShowOldGroupDropdown(true); setOldGroupId(''); }}
               onFocus={() => setShowOldGroupDropdown(true)}
-              placeholder="Search cloud group"
+              placeholder="Search group / cloud group"
               className="w-full py-2 px-3 border rounded-lg"
             />
             {showOldGroupDropdown && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border rounded shadow max-h-56 overflow-y-auto z-50">
-                <div onClick={() => { setOldGroupId(''); setOldGroupSearch(''); setShowOldGroupDropdown(false); }} className="px-3 py-2 hover:bg-gray-50 cursor-pointer italic text-gray-500">— None / Remove —</div>
-                {oldGroups.filter(g => !oldGroupSearch || (g.name || '').toLowerCase().includes(oldGroupSearch.toLowerCase()) || String(g.id).includes(oldGroupSearch)).length === 0 ? (
+                <div onClick={() => { setOldGroupId(''); setOldGroupType('cloud'); setOldGroupSearch(''); setShowOldGroupDropdown(false); }} className="px-3 py-2 hover:bg-gray-50 cursor-pointer italic text-gray-500">— None / Remove —</div>
+                {oldGroups.filter(g => !oldGroupSearch || groupLabel(g).toLowerCase().includes(oldGroupSearch.toLowerCase()) || String(g.id).includes(oldGroupSearch)).length === 0 ? (
                   <div className="px-3 py-2 text-gray-400">No groups</div>
-                ) : oldGroups.filter(g => !oldGroupSearch || (g.name || '').toLowerCase().includes(oldGroupSearch.toLowerCase()) || String(g.id).includes(oldGroupSearch)).map(g => (
-                  <div key={g.id} onClick={() => { setOldGroupId(String(g.id)); setOldGroupSearch(''); setShowOldGroupDropdown(false); }} className="px-3 py-2 hover:bg-gray-50 cursor-pointer">{g.name} {g.old_id ? `(${g.old_id})` : ''} <span className="text-gray-400">#{g.id}</span></div>
+                ) : oldGroups.filter(g => !oldGroupSearch || groupLabel(g).toLowerCase().includes(oldGroupSearch.toLowerCase()) || String(g.id).includes(oldGroupSearch)).map(g => (
+                  <div key={`${g.type}-${g.id}`} onClick={() => { setOldGroupId(String(g.id)); setOldGroupType(g.type === 'group' ? 'group' : 'cloud'); setOldGroupSearch(''); setShowOldGroupDropdown(false); }} className="px-3 py-2 hover:bg-gray-50 cursor-pointer flex items-center justify-between gap-2">
+                    <span className="truncate"><span className={`text-[10px] font-bold uppercase mr-2 px-1.5 py-0.5 rounded ${g.type === 'group' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{g.type === 'group' ? 'Group' : 'Cloud'}</span>{g.name}</span>
+                    <span className="text-gray-400 text-xs whitespace-nowrap">{g.cnt} cust · #{g.id}</span>
+                  </div>
                 ))}
               </div>
             )}
