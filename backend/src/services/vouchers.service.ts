@@ -2770,12 +2770,23 @@ export class VouchersService implements OnModuleInit {
         // instance doesn't blow up every voucher fetch.
         const vch = await this.db.queryOne<any>(
             `SELECT v.*, c.company AS party_name,
+                    c.address1 AS party_address1,
+                    c.address2 AS party_address2,
+                    c.gstin    AS party_gst,
+                    c.mobile   AS party_mobile,
+                    c.email    AS party_email,
+                    c.person   AS party_contact_person,
+                    c.pincode  AS party_pincode,
+                    pv.city    AS party_city,
+                    s.name     AS party_state,
                     vt.name AS vch_type_name,
                     vt.parent_id AS vch_type_parent_id,
                     p.name AS vch_parent_type_name,
                     COALESCE(p.name, vt.name) AS vch_display_type
              FROM vch_details v
              LEFT JOIN customer c ON v.party_ledger_id = c.id
+             LEFT JOIN pincode pv ON c.pincode = pv.pincode
+             LEFT JOIN state s    ON pv.stateid = s.id
              LEFT JOIN vchtype vt ON v.vch_type_id = vt.id
              LEFT JOIN vchtype p ON vt.parent_id = p.id AND vt.parent_id != vt.id
              WHERE v.id = ?`, [id],
