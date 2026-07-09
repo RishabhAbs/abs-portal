@@ -2860,14 +2860,18 @@ export class VouchersService implements OnModuleInit {
         return { prefix: pp?.particulars ?? '', suffix: sp?.particulars ?? '' };
     }
 
-    /** Generate next voucher number for a given vch_type_id using date-effective periods. */
-    async getNextVoucherNo(vchTypeId: number, forDate?: string): Promise<string> {
+    /** Generate next voucher number for a given vch_type_id using date-effective periods.
+     *  opts.force generates a number even when the type is set to manual
+     *  numbering — used by auto-created vouchers (activity auto-invoices)
+     *  that must ALWAYS carry a number so their "New" bill allocation has a
+     *  reference to hang on. */
+    async getNextVoucherNo(vchTypeId: number, forDate?: string, opts?: { force?: boolean }): Promise<string> {
         const today = forDate || new Date().toISOString().split('T')[0];
 
         const vtRow = await this.db.queryOne<any>(
             `SELECT numbering_mode, vch_width FROM vchtype WHERE id = ?`, [vchTypeId]
         );
-        if (!vtRow || vtRow.numbering_mode !== 'automatic') return '';
+        if (!vtRow || (!opts?.force && vtRow.numbering_mode !== 'automatic')) return '';
 
         const width: number = vtRow.vch_width || 3;
 

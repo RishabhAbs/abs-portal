@@ -1325,8 +1325,22 @@ export class CustomersService implements OnModuleInit {
       // Cloud Mappings / server details (across all mapped companies)
       if (canViewMappings) {
         try {
+          // Users column: stored cloud_mappings.billed_users gets zeroed by
+          // syncUserCounts whenever no billing period covers TODAY (e.g. the
+          // quarter lapsed and the renewal isn't entered yet) — so fall back
+          // to the LATEST Sales activity's billing_units for that server, the
+          // number the customer was last billed for.
           const rawMappings = await this.db.query<any>(`
-            SELECT cm.id, cm.server_id, cm.serial_no, cm.billed_users,
+            SELECT cm.id, cm.server_id, cm.serial_no,
+              COALESCE(NULLIF(cm.billed_users, 0), (
+                SELECT ca.billing_units FROM cloud_activities ca
+                WHERE ca.customer_id = cm.customer_id
+                  AND ca.record_nature = 'Sales' AND ca.billing_units > 0
+                  AND (ca.server_name = cs.server_ip OR ca.server_name = cs.customer_ip
+                       OR ca.customer_domain_ip = cs.customer_ip OR ca.customer_domain_ip = cs.server_ip)
+                ORDER BY ca.activity_date DESC, ca.created_at DESC
+                LIMIT 1
+              ), cm.billed_users) AS billed_users,
               cm.purchase_users, cm.status, cm.billing_cycle, cm.billing_mode,
               cm.billing_rate, cm.purchase_rate, cm.expiry_date, cm.mapped_at,
               cs.server_ip, cs.customer_ip, cs.company as server_company, cs.port,

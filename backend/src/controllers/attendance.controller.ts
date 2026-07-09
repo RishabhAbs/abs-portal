@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, UseGuards, Request, Query, Param, ForbiddenException } from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Request, Query, Param, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { AttendanceService } from '../services/attendance.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -12,16 +12,29 @@ import { RequirePermission } from '../decorators/permissions.decorator';
 export class AttendanceController {
   constructor(private attendanceService: AttendanceService) {}
 
+  /** Missing/garbage coordinates used to fall through into the SQL layer
+   *  and blow up as a 500 ("Bind parameters must not contain undefined").
+   *  Reject them here with a message the user can actually act on. */
+  private assertCoords(body: { lat?: any; lng?: any }) {
+    const lat = Number(body?.lat), lng = Number(body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new BadRequestException('Location not available — please allow location access in your browser and try again.');
+    }
+    return { lat, lng };
+  }
+
   @Post('checkin')
   @ApiOperation({ summary: 'Check in for the day (Geofenced)' })
   async checkIn(@Body() body: { lat: number; lng: number }, @Request() req: any) {
-    return this.attendanceService.checkIn(req.user.id, body.lat, body.lng);
+    const { lat, lng } = this.assertCoords(body);
+    return this.attendanceService.checkIn(req.user.id, lat, lng);
   }
 
   @Post('checkout')
   @ApiOperation({ summary: 'Check out for the day (Geofenced)' })
   async checkOut(@Body() body: { lat: number; lng: number }, @Request() req: any) {
-    return this.attendanceService.checkOut(req.user.id, body.lat, body.lng);
+    const { lat, lng } = this.assertCoords(body);
+    return this.attendanceService.checkOut(req.user.id, lat, lng);
   }
 
   @Get('status')

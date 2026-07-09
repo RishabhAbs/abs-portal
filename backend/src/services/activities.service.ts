@@ -364,25 +364,40 @@ export class ActivitiesService {
    *  Returns null (never throws) if no usable type or the fixed item
    *  isn't set up — the caller logs that as a soft failure. */
   private async autoCreateTaxInvoiceForActivity(activity: Activity, voucherTypeId?: number): Promise<{ id: number; vch_no: string } | null> {
+    // Family follows the activity's bill type:
+    //   Tax Invoice → Sales family,       default "Cloud Billing"
+    //   Credit Note → Credit Note family, default "Cloud CN"
+    const isCreditNote = (activity as any).bill_type === 'Credit Note';
+    const family = isCreditNote ? 'credit note' : 'sales';
+    const defaultName = isCreditNote ? 'cloud cn' : 'cloud billing';
+    const fallbackName = isCreditNote ? 'credit note' : 'tax invoice';
+
     let vchType: { id: number } | null = null;
     if (voucherTypeId) {
-      // Only accept a type that actually belongs to the Sales family —
-      // an arbitrary id must not create Payments/Journals from here.
+      // Only accept a type inside the correct family — an arbitrary id must
+      // not create Payments/Journals (or the wrong side) from here. Family
+      // membership walks the WHOLE parent chain, so sub-types of sub-types
+      // (e.g. a custom type under Cloud Billing) validate correctly.
+      const all = await this.db.query<any>(`SELECT id, name, parent_id FROM vchtype`);
+      const byId = new Map(all.map((t: any) => [Number(t.id), t]));
+      let cur: any = byId.get(Number(voucherTypeId));
+      for (let hops = 0; cur && hops < 20; hops++) {
+        if (String(cur.name || '').toLowerCase() === family) {
+          vchType = { id: Number(voucherTypeId) };
+          break;
+        }
+        if (cur.parent_id === cur.id || cur.parent_id == null) break; // hit a different root
+        cur = byId.get(Number(cur.parent_id));
+      }
+    }
+    if (!vchType) {
       vchType = await this.db.queryOne<{ id: number }>(
-        `SELECT vt.id FROM vchtype vt
-         LEFT JOIN vchtype p ON vt.parent_id = p.id
-         WHERE vt.id = ? AND (LOWER(vt.name) = 'sales' OR LOWER(p.name) = 'sales') LIMIT 1`,
-        [voucherTypeId],
+        `SELECT id FROM vchtype WHERE LOWER(name) = ? LIMIT 1`, [defaultName],
       );
     }
     if (!vchType) {
       vchType = await this.db.queryOne<{ id: number }>(
-        `SELECT id FROM vchtype WHERE LOWER(name) = 'cloud billing' LIMIT 1`,
-      );
-    }
-    if (!vchType) {
-      vchType = await this.db.queryOne<{ id: number }>(
-        `SELECT id FROM vchtype WHERE LOWER(name) = 'tax invoice' LIMIT 1`,
+        `SELECT id FROM vchtype WHERE LOWER(name) = ? LIMIT 1`, [fallbackName],
       );
     }
     if (!vchType) return null;
@@ -414,16 +429,42 @@ export class ActivitiesService {
     }
     const isIgst = stateName ? stateName.toLowerCase() !== HOME_STATE.toLowerCase() : false;
 
-    const rate = +Number(activity.bill_amount).toFixed(2);
+    // Credit Note activities carry negative units/amounts — the voucher line
+    // itself is entered positive; the Credit Note type's deemed_positive=NO
+    // flips the accounting direction.
+    const rate = +Math.abs(Number(activity.bill_amount)).toFixed(2);
     const gstRate = Number(item.gst) || 0;
     const cgstAmount = isIgst ? 0 : +(rate * gstRate / 2 / 100).toFixed(2);
     const sgstAmount = isIgst ? 0 : +(rate * gstRate / 2 / 100).toFixed(2);
     const igstAmount = isIgst ? +(rate * gstRate / 100).toFixed(2) : 0;
     const grandTotal = +(rate + cgstAmount + sgstAmount + igstAmount).toFixed(2);
 
-    const suggestedVchNo = await this.vouchersService.getNextVoucherNo(vchType.id, activityDate);
+    // ALWAYS auto-number (even if the type is set to manual numbering) so
+    // the bill allocation below can always be "New" with the voucher's own
+    // number as its reference.
+    const suggestedVchNo = await this.vouchersService.getNextVoucherNo(vchType.id, activityDate, { force: true });
+
+    // Auto-remark: the voucher itself records what was billed — type,
+    // bill type, cycle, mode, start → expiry, users @ rate = amount.
+    // Mirrors the remark the Vouchers page writes when activities are
+    // hand-picked via the Cloud Billing popup.
+    const fmtD = (s: any) => {
+      if (!s) return '';
+      const d = new Date(String(s).replace(' ', 'T'));
+      return isNaN(d.getTime()) ? String(s) : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+    };
+    const a: any = activity;
+    const autoRemark = [
+      a.activity_type || 'Renewal',
+      a.bill_type || '',
+      a.billing_cycle || '',
+      String(a.billing_mode || '').replace(/_/g, ' '),
+      [fmtD(a.start_from), fmtD(a.new_expiry_date)].filter(Boolean).join(' to '),
+      `${Number(a.billing_units) || 0} users @ ${Number(a.last_bill_rate) || 0} = ${Number(a.bill_amount || 0).toLocaleString('en-IN')}`,
+    ].filter(Boolean).join(', ');
 
     const created = await this.vouchersService.create({
+      remark: autoRemark || undefined,
       vch_type_id: vchType.id,
       vch_no: suggestedVchNo || undefined,
       vch_date: activityDate,
@@ -441,10 +482,9 @@ export class ActivitiesService {
         batch_rows: null,
       }],
       ledgers: [],
-      // Same rule as the Quick Invoice modal: "New" only makes sense once a
-      // number actually got assigned; manual numbering with none assigned
-      // falls back to "On Account".
-      bill_allocation: [{ type: suggestedVchNo ? 'New' : 'On Account', refno: '', amount: grandTotal, direction: 'Dr' }],
+      // Always "New": the forced auto-number above guarantees a reference
+      // (the backend uses the saved vch_no as the bill name for New rows).
+      bill_allocation: [{ type: 'New', refno: '', amount: grandTotal, direction: isCreditNote ? 'Cr' : 'Dr' }],
     } as any);
 
     return { id: (created as any).id, vch_no: (created as any).vch_no };
@@ -986,8 +1026,8 @@ export class ActivitiesService {
     // philosophy as linkLeadAndAutoClose in vouchers.service.ts.
     if (
       resultActivity.record_nature === 'Sales' &&
-      resultActivity.bill_type === 'Tax Invoice' &&
-      Number(resultActivity.bill_amount) > 0 &&
+      (resultActivity.bill_type === 'Tax Invoice' || resultActivity.bill_type === 'Credit Note') &&
+      Math.abs(Number(resultActivity.bill_amount)) > 0 &&
       resultActivity.customer_id &&
       !(resultActivity as any).voucher_id &&
       !(resultActivity as any).voucher_no
