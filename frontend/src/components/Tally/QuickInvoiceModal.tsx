@@ -72,9 +72,19 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
 
                 const allTypes = typesRes.success ? (typesRes.data || []) : [];
                 const sales = allTypes.find((t: any) => t.name?.toLowerCase() === 'sales');
-                const children = sales
-                    ? allTypes.filter((t: any) => t.parent_id === sales.id && t.id !== sales.id)
-                    : [];
+                // Whole Sales family (sub-types of sub-types included)
+                const byId = new Map(allTypes.map((x: any) => [x.id, x]));
+                const inSalesFamily = (t: any) => {
+                    if (!sales) return false;
+                    let cur: any = t;
+                    for (let hops = 0; cur && hops < 20; hops++) {
+                        if (cur.id === sales.id) return true;
+                        if (cur.parent_id === cur.id || cur.parent_id == null) return false;
+                        cur = byId.get(cur.parent_id);
+                    }
+                    return false;
+                };
+                const children = allTypes.filter((t: any) => sales && t.id !== sales.id && inSalesFamily(t));
                 setVchTypes(children);
                 const def = children.find((t: any) => t.name.toLowerCase() === 'tally billing')
                     ?? children.find((t: any) => t.name.toLowerCase() === 'tax invoice')

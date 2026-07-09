@@ -249,28 +249,39 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
   const [editing, setEditing] = useState<Activity | null>(null);
   const [renewMode, setRenewMode] = useState<'billing' | 'purchase' | null>(null);
 
-  // Voucher type for the auto-created invoice (Sales children only).
-  // Defaults to "Cloud Billing" — falls back to "Tax Invoice" if missing.
+  // Voucher type for the auto-created voucher. Bill Type picks the family:
+  //   Tax Invoice → Sales children,      default "Cloud Billing"
+  //   Credit Note → Credit Note children, default "Cloud CN"
   const [salesVchTypes, setSalesVchTypes] = useState<{ id: number; name: string }[]>([]);
+  const [creditVchTypes, setCreditVchTypes] = useState<{ id: number; name: string }[]>([]);
   const [voucherTypeId, setVoucherTypeId] = useState<number | ''>('');
   useEffect(() => {
     vchTypeApi.getAll()
       .then(res => {
         if (!res.success) return;
         const all = res.data || [];
-        const sales = all.find((t: any) => t.name?.toLowerCase() === 'sales');
-        if (!sales) return;
-        const children = all.filter((t: any) => t.parent_id === sales.id && t.id !== sales.id);
-        setSalesVchTypes(children);
+        // Whole family, not just direct children — a type filed under
+        // Cloud Billing (itself under Sales) still counts as Sales-family.
+        const familyOf = (rootName: string) => {
+          const root = all.find((t: any) => t.name?.toLowerCase() === rootName);
+          if (!root) return [];
+          const byId = new Map(all.map((x: any) => [x.id, x]));
+          const inFamily = (t: any) => {
+            let cur: any = t;
+            for (let hops = 0; cur && hops < 20; hops++) {
+              if (cur.id === root.id) return true;
+              if (cur.parent_id === cur.id || cur.parent_id == null) return false;
+              cur = byId.get(cur.parent_id);
+            }
+            return false;
+          };
+          return all.filter((t: any) => t.id !== root.id && inFamily(t));
+        };
+        setSalesVchTypes(familyOf('sales'));
+        setCreditVchTypes(familyOf('credit note'));
       })
       .catch(() => { /* dropdown just stays hidden */ });
   }, []);
-  useEffect(() => {
-    if (!showModal || editing) return;
-    const def = salesVchTypes.find(t => t.name.toLowerCase() === 'cloud billing')
-      ?? salesVchTypes.find(t => t.name.toLowerCase() === 'tax invoice');
-    setVoucherTypeId(def?.id ?? '');
-  }, [showModal, editing, salesVchTypes]);
   const [serverSearch, setServerSearch] = useState('');
   const [showServerDropdown, setShowServerDropdown] = useState(false);
   const [currentPlanDetails, setCurrentPlanDetails] = useState<any>(null);
@@ -400,6 +411,18 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
   });
 
   const [availableActivityTypes, setAvailableActivityTypes] = useState<string[]>(['New', 'User']);
+
+  // Which voucher-type family the auto-voucher dropdown offers follows the
+  // Bill Type: Tax Invoice → Sales children, Credit Note → Credit Note children.
+  const activeVchTypes = form.bill_type === 'Credit Note' ? creditVchTypes : salesVchTypes;
+  useEffect(() => {
+    if (!showModal || editing) return;
+    const def = form.bill_type === 'Credit Note'
+      ? (creditVchTypes.find(t => t.name.toLowerCase() === 'cloud cn') ?? creditVchTypes[0])
+      : (salesVchTypes.find(t => t.name.toLowerCase() === 'cloud billing')
+        ?? salesVchTypes.find(t => t.name.toLowerCase() === 'tax invoice'));
+    setVoucherTypeId(def?.id ?? '');
+  }, [showModal, editing, salesVchTypes, creditVchTypes, form.bill_type]);
 
   const canAdd = canCreate('activities');
   const canEditActivity = canEdit('activities');
@@ -2361,15 +2384,15 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                           <option value="Tax Invoice">Tax Invoice</option>
                           <option value="Credit Note">Credit Note</option>
                         </select>
-                        {!editing && form.bill_type === 'Tax Invoice' && salesVchTypes.length > 0 && (
+                        {!editing && activeVchTypes.length > 0 && (
                           <div className="mt-2">
-                            <label className="block text-xs font-semibold text-gray-600 mb-1">Voucher Type (auto-invoice)</label>
+                            <label className="block text-xs font-semibold text-gray-600 mb-1">Voucher Type (auto-voucher)</label>
                             <select
                               value={voucherTypeId}
                               onChange={e => setVoucherTypeId(Number(e.target.value) || '')}
                               className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                             >
-                              {salesVchTypes.map(t => (
+                              {activeVchTypes.map(t => (
                                 <option key={t.id} value={t.id}>{t.name}</option>
                               ))}
                             </select>
@@ -2625,7 +2648,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                         )}
 
                         {(() => {
-                          const showVt = !editing && form.bill_type === 'Tax Invoice' && form.is_sales && salesVchTypes.length > 0;
+                          const showVt = !editing && form.is_sales && activeVchTypes.length > 0;
                           // One row: Activity Date | Voucher Type | Bill Type | SOF —
                           // all controls share the same h-9 height so nothing wraps
                           // or looks mismatched.
@@ -2637,7 +2660,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                                 <div>
                                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Voucher Type</label>
                                   <select value={voucherTypeId} onChange={e => setVoucherTypeId(Number(e.target.value) || '')} className={ctl}>
-                                    {salesVchTypes.map(t => (
+                                    {activeVchTypes.map(t => (
                                       <option key={t.id} value={t.id}>{t.name}</option>
                                     ))}
                                   </select>

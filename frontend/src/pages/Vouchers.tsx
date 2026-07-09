@@ -432,7 +432,9 @@ const Vouchers: React.FC = () => {
 
   const handleDirectDownload = (id: number | string) => {
     const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+    // Real (offscreen) size — a 1×1 iframe collapses the invoice layout and
+    // the generated PDF comes out stretched/distorted.
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:900px;height:1200px;border:none;';
     iframe.src = `/billing/print-voucher/${id}?download=1`;
     document.body.appendChild(iframe);
     setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);
@@ -646,9 +648,21 @@ const Vouchers: React.FC = () => {
     t.is_system === 1 &&
     (isAdmin() || allowedVchParentIds.length === 0 || allowedVchParentIds.includes(t.id))
   );
-  const childTypes    = allVchTypes.filter(t =>
-    selectedParentId === null || t.parent_id === selectedParentId || t.id === selectedParentId
-  );
+  // A type belongs to the selected family if the selected parent appears
+  // ANYWHERE up its parent chain — so sub-types of sub-types (e.g. a custom
+  // type filed under Cloud Billing, itself under Sales) still show up.
+  const isInFamily = useCallback((t: any, rootId: number | null) => {
+    if (rootId === null) return true;
+    const byId = new Map(allVchTypes.map((x: any) => [x.id, x]));
+    let cur: any = t;
+    for (let hops = 0; cur && hops < 20; hops++) {
+      if (cur.id === rootId) return true;
+      if (cur.parent_id === cur.id || cur.parent_id == null) return false; // reached a root
+      cur = byId.get(cur.parent_id);
+    }
+    return false;
+  }, [allVchTypes]);
+  const childTypes    = allVchTypes.filter(t => isInFamily(t, selectedParentId));
 
   const [voucherType, setVoucherType] = useState('');
 
@@ -707,7 +721,7 @@ const Vouchers: React.FC = () => {
   useEffect(() => {
     if (params.id) return;
     if ((location.state as any)?.editVoucher?.id) return;
-    const children = allVchTypes.filter(t => selectedParentId === null || t.parent_id === selectedParentId || t.id === selectedParentId);
+    const children = allVchTypes.filter(t => isInFamily(t, selectedParentId));
     if (children.some(t => t.name === voucherType)) return;
     setVoucherType(children[0]?.name ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1682,6 +1696,24 @@ const Vouchers: React.FC = () => {
       return updated;
     });
     setActivitiesToLink(prev => Array.from(new Set([...prev, ...selected.map(a => String(a.id))])));
+    // Auto-write the voucher remark from the picked activities so the
+    // printed voucher itself says exactly what was billed:
+    // type, bill type, cycle, mode, start → expiry, users @ rate = amount.
+    const fmtD = (s: any) => {
+      if (!s) return '';
+      const d = new Date(String(s).replace(' ', 'T'));
+      return isNaN(d.getTime()) ? String(s) : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+    };
+    const pretty = (s: any) => String(s || '').replace(/_/g, ' ');
+    const autoRemark = selected.map(a => [
+      a.activity_type || 'Renewal',
+      a.bill_type || '',
+      a.billing_cycle || '',
+      pretty(a.billing_mode),
+      [fmtD(a.start_from), fmtD(a.new_expiry_date)].filter(Boolean).join(' to '),
+      `${Number(a.billing_units) || 0} users @ ${Number(a.last_bill_rate) || 0} = ${Number(getActivityAmt(a)).toLocaleString('en-IN')}`,
+    ].filter(Boolean).join(', ')).join(' || ');
+    if (autoRemark) setRemark(autoRemark);
     setCloudPopup(null);
   };
 

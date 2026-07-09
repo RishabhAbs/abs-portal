@@ -393,18 +393,48 @@ export default function PrintVoucher() {
 
   const totals = useMemo(() => {
     const taxable = lineItems.reduce((s, i) => s + i.amount, 0);
-    const cgst    = lineItems.reduce((s, i) => s + i.cgst, 0);
-    const sgst    = lineItems.reduce((s, i) => s + i.sgst, 0);
-    const igst    = lineItems.reduce((s, i) => s + i.igst, 0);
-    const total   = +(taxable + cgst + sgst + igst).toFixed(2);
+    // Computed taxes are only the FALLBACK. The voucher's own ledger rows
+    // are authoritative — they carry the saved CGST/SGST/IGST plus Round
+    // Off and any other charge ledgers. Recomputing from items (the old
+    // way) silently dropped Round Off, so the printed total didn't match
+    // the voucher amount.
+    let cgst = lineItems.reduce((s, i) => s + i.cgst, 0);
+    let sgst = lineItems.reduce((s, i) => s + i.sgst, 0);
+    let igst = lineItems.reduce((s, i) => s + i.igst, 0);
+    const extras: { name: string; amount: number }[] = [];
+
+    const entries: any[] = voucher?.ledgerEntries || [];
+    const partyRow = entries.find((le: any) => String(le.ledger_id) === String(voucher?.party_ledger_id));
+    // Ledger amounts are signed (+Dr/−Cr). On a sales-side voucher the
+    // party is Dr and every charge row is Cr — its addition to the bill is
+    // the negated amount. On credit-note side it flips. −partySign×amt
+    // covers both.
+    const partySign = Number(partyRow?.amount ?? 1) >= 0 ? 1 : -1;
+    let sawTaxRows = false;
+    let actCgst = 0, actSgst = 0, actIgst = 0;
+    for (const le of entries) {
+      if (le === partyRow) continue;
+      if ((le.inventoryEntries?.length ?? 0) > 0) continue; // goods row = the items themselves
+      const name = String(le.ledger_name || '').trim();
+      const display = +(-partySign * Number(le.amount || 0)).toFixed(2);
+      if (/^cgst$/i.test(name))      { actCgst += display; sawTaxRows = true; }
+      else if (/^sgst$/i.test(name)) { actSgst += display; sawTaxRows = true; }
+      else if (/^igst$/i.test(name)) { actIgst += display; sawTaxRows = true; }
+      else if (display !== 0 || /round/i.test(name)) extras.push({ name: name || 'Other Charges', amount: display });
+    }
+    if (sawTaxRows) { cgst = actCgst; sgst = actSgst; igst = actIgst; }
+
+    const extrasSum = extras.reduce((s, e) => s + e.amount, 0);
+    const total = +(taxable + cgst + sgst + igst + extrasSum).toFixed(2);
     return {
       taxable: +taxable.toFixed(2),
       cgst:    +cgst.toFixed(2),
       sgst:    +sgst.toFixed(2),
       igst:    +igst.toFixed(2),
+      extras,
       total,
     };
-  }, [lineItems]);
+  }, [lineItems, voucher]);
 
   const handlePrint = () => {
     if (!voucher) return;
@@ -423,7 +453,15 @@ export default function PrintVoucher() {
     const src = invoiceRef.current!;
     const clone = src.cloneNode(true) as HTMLElement;
     const holder = document.createElement('div');
-    holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${src.offsetWidth}px;background:#fff;`;
+    // Render at a FIXED A4-proportioned width, never the live node's
+    // offsetWidth — inside the hidden download/share iframe that width is
+    // near zero, and a collapsed clone is exactly what produced the
+    // stretched, distorted PDFs. 794px = A4 width at 96dpi.
+    const A4_PX = 794;
+    holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${A4_PX}px;background:#fff;`;
+    clone.style.width = `${A4_PX}px`;
+    clone.style.maxWidth = `${A4_PX}px`;
+    clone.style.margin = '0';
     holder.appendChild(clone);
     document.body.appendChild(holder);
     return { clone, cleanup: () => { try { document.body.removeChild(holder); } catch { /* already gone */ } } };
@@ -659,8 +697,11 @@ export default function PrintVoucher() {
           )}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-3 p-3 overflow-hidden print:p-0 print:gap-0 print:block">
-          {/* ── LEFT: Editor panel ── */}
+        <div className="flex-1 min-h-0 grid grid-cols-1 gap-3 p-3 overflow-hidden print:p-0 print:gap-0 print:block">
+          {/* Editor panel intentionally removed — the invoice is read-only.
+              Everything renders from the voucher + customer record; company
+              details / bank / terms come from the saved defaults. */}
+          {false && (
           <div className="no-print overflow-auto bg-white border border-slate-300 rounded p-3 space-y-4 print:hidden">
             <Section title="Company">
               <Input label="Name" value={company.name} onChange={v => setCompany(c => ({ ...c, name: v }))} />
@@ -812,10 +853,11 @@ export default function PrintVoucher() {
               </button>
             </Section>
           </div>
+          )}
 
-          {/* ── RIGHT: Invoice preview ── */}
+          {/* ── Invoice preview (read-only) ── */}
           <div className="overflow-auto print:overflow-visible">
-            <div ref={invoiceRef}>
+            <div ref={invoiceRef} className="max-w-[860px] mx-auto">
               <InvoicePreview
                 company={company}
                 voucher={voucher}
@@ -1045,7 +1087,7 @@ function InvoicePreview({
   };
   items: any[];
   isIgst: boolean;
-  totals: { taxable: number; cgst: number; sgst: number; igst: number; total: number };
+  totals: { taxable: number; cgst: number; sgst: number; igst: number; extras?: { name: string; amount: number }[]; total: number };
   bank: BankAccount;
   terms: string[];
 }) {
@@ -1238,6 +1280,13 @@ function InvoicePreview({
                   <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total GST Amount</td>
                   <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(totals.cgst + totals.sgst + totals.igst)}</td>
                 </tr>
+                {(totals.extras || []).map((ex, i) => (
+                  <tr key={`extra-${i}`}>
+                    <td className="border border-slate-200 px-2 py-1.5"></td>
+                    <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right">{ex.name}</td>
+                    <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{ex.amount < 0 ? `(${fmt(Math.abs(ex.amount))})` : fmt(ex.amount)}</td>
+                  </tr>
+                ))}
                 <tr className="bg-emerald-50">
                   <td className="border border-slate-200 px-2 py-2"></td>
                   <td colSpan={5} className="border border-slate-200 px-2 py-2 text-right font-bold text-emerald-800 uppercase tracking-wide">Total Amount Payable</td>

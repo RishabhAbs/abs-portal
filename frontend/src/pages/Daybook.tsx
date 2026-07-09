@@ -242,6 +242,40 @@ export default function Daybook() {
     return [...out].sort(byKey);
   }, [rows, search, filterParticulars, filterVchType, filterVchNo, filterDrMin, filterDrMax, filterCrMin, filterCrMax, sortKey, sortDir]);
 
+  // When a text search finds nothing inside the window, look OUTSIDE it —
+  // a voucher-number search shouldn't dead-end just because the voucher is
+  // dated outside the picked range (e.g. a future-dated auto-invoice).
+  const [outsideMatches, setOutsideMatches] = useState<any[]>([]);
+  useEffect(() => {
+    setOutsideMatches([]);
+    const q = (search || '').trim().toLowerCase();
+    if (!q || loading || filteredRows.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await vouchersApi.getDaybook({ date_from: '2000-01-01', date_to: '2099-12-31' });
+        if (!res.success || cancelled) return;
+        const m = (res.data || []).filter((r: any) =>
+          String(r.vch_no || '').toLowerCase().includes(q) ||
+          String(r.party_name || '').toLowerCase().includes(q));
+        if (!cancelled) setOutsideMatches(m.slice(0, 10));
+      } catch { /* plain empty-state text stays */ }
+    })();
+    return () => { cancelled = true; };
+  }, [search, loading, filteredRows.length]);
+
+  // Widen the applied range just enough to cover every outside match.
+  const expandRangeToMatches = () => {
+    if (!outsideMatches.length) return;
+    const dates = outsideMatches.map(r => String(r.vch_date).slice(0, 10)).sort();
+    updateParams({
+      from: dates[0] < dateFrom ? dates[0] : dateFrom,
+      to: dates[dates.length - 1] > dateTo ? dates[dates.length - 1] : dateTo,
+      q: search, p: filterParticulars, vt: filterVchType, vn: filterVchNo,
+      drMin: filterDrMin, drMax: filterDrMax, crMin: filterCrMin, crMax: filterCrMax,
+    });
+  };
+
   const totalDr = filteredRows.reduce((s, r) => s + Number(r.dr_amount || 0), 0);
   const totalCr = filteredRows.reduce((s, r) => s + Number(r.cr_amount || 0), 0);
 
@@ -420,6 +454,23 @@ export default function Daybook() {
                   : (dateFrom === dateTo
                     ? `No vouchers for ${displayDate(dateFrom)}`
                     : `No vouchers between ${displayDate(dateFrom)} and ${displayDate(dateTo)}`)}
+                {search && outsideMatches.length > 0 && (
+                  <div className="mt-3 inline-block text-left bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                    <div className="text-[13px] font-semibold text-amber-800 mb-1.5">
+                      Found {outsideMatches.length} matching voucher(s) OUTSIDE this date range:
+                    </div>
+                    {outsideMatches.map((m: any) => (
+                      <div key={m.id} className="text-[13px] text-slate-700 py-0.5">
+                        <button onClick={() => openVoucher(m.id)} className="text-blue-600 hover:underline font-medium">{m.vch_no || '(no number)'}</button>
+                        {' — '}{m.party_name || '—'} · dated <b>{displayDate(m.vch_date)}</b>
+                      </div>
+                    ))}
+                    <button onClick={expandRangeToMatches}
+                      className="mt-2 text-[12px] font-bold text-amber-700 border border-amber-300 bg-white hover:bg-amber-100 rounded px-2.5 py-1">
+                      Expand date range to show them
+                    </button>
+                  </div>
+                )}
               </td></tr>
             ) : (
               visibleRows.map((row, i) => {
