@@ -393,18 +393,48 @@ export default function PrintVoucher() {
 
   const totals = useMemo(() => {
     const taxable = lineItems.reduce((s, i) => s + i.amount, 0);
-    const cgst    = lineItems.reduce((s, i) => s + i.cgst, 0);
-    const sgst    = lineItems.reduce((s, i) => s + i.sgst, 0);
-    const igst    = lineItems.reduce((s, i) => s + i.igst, 0);
-    const total   = +(taxable + cgst + sgst + igst).toFixed(2);
+    // Computed taxes are only the FALLBACK. The voucher's own ledger rows
+    // are authoritative — they carry the saved CGST/SGST/IGST plus Round
+    // Off and any other charge ledgers. Recomputing from items (the old
+    // way) silently dropped Round Off, so the printed total didn't match
+    // the voucher amount.
+    let cgst = lineItems.reduce((s, i) => s + i.cgst, 0);
+    let sgst = lineItems.reduce((s, i) => s + i.sgst, 0);
+    let igst = lineItems.reduce((s, i) => s + i.igst, 0);
+    const extras: { name: string; amount: number }[] = [];
+
+    const entries: any[] = voucher?.ledgerEntries || [];
+    const partyRow = entries.find((le: any) => String(le.ledger_id) === String(voucher?.party_ledger_id));
+    // Ledger amounts are signed (+Dr/−Cr). On a sales-side voucher the
+    // party is Dr and every charge row is Cr — its addition to the bill is
+    // the negated amount. On credit-note side it flips. −partySign×amt
+    // covers both.
+    const partySign = Number(partyRow?.amount ?? 1) >= 0 ? 1 : -1;
+    let sawTaxRows = false;
+    let actCgst = 0, actSgst = 0, actIgst = 0;
+    for (const le of entries) {
+      if (le === partyRow) continue;
+      if ((le.inventoryEntries?.length ?? 0) > 0) continue; // goods row = the items themselves
+      const name = String(le.ledger_name || '').trim();
+      const display = +(-partySign * Number(le.amount || 0)).toFixed(2);
+      if (/^cgst$/i.test(name))      { actCgst += display; sawTaxRows = true; }
+      else if (/^sgst$/i.test(name)) { actSgst += display; sawTaxRows = true; }
+      else if (/^igst$/i.test(name)) { actIgst += display; sawTaxRows = true; }
+      else if (display !== 0 || /round/i.test(name)) extras.push({ name: name || 'Other Charges', amount: display });
+    }
+    if (sawTaxRows) { cgst = actCgst; sgst = actSgst; igst = actIgst; }
+
+    const extrasSum = extras.reduce((s, e) => s + e.amount, 0);
+    const total = +(taxable + cgst + sgst + igst + extrasSum).toFixed(2);
     return {
       taxable: +taxable.toFixed(2),
       cgst:    +cgst.toFixed(2),
       sgst:    +sgst.toFixed(2),
       igst:    +igst.toFixed(2),
+      extras,
       total,
     };
-  }, [lineItems]);
+  }, [lineItems, voucher]);
 
   const handlePrint = () => {
     if (!voucher) return;
@@ -1045,7 +1075,7 @@ function InvoicePreview({
   };
   items: any[];
   isIgst: boolean;
-  totals: { taxable: number; cgst: number; sgst: number; igst: number; total: number };
+  totals: { taxable: number; cgst: number; sgst: number; igst: number; extras?: { name: string; amount: number }[]; total: number };
   bank: BankAccount;
   terms: string[];
 }) {
@@ -1238,6 +1268,13 @@ function InvoicePreview({
                   <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right font-semibold">Total GST Amount</td>
                   <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(totals.cgst + totals.sgst + totals.igst)}</td>
                 </tr>
+                {(totals.extras || []).map((ex, i) => (
+                  <tr key={`extra-${i}`}>
+                    <td className="border border-slate-200 px-2 py-1.5"></td>
+                    <td colSpan={5} className="border border-slate-200 px-2 py-1.5 text-right">{ex.name}</td>
+                    <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{ex.amount < 0 ? `(${fmt(Math.abs(ex.amount))})` : fmt(ex.amount)}</td>
+                  </tr>
+                ))}
                 <tr className="bg-emerald-50">
                   <td className="border border-slate-200 px-2 py-2"></td>
                   <td colSpan={5} className="border border-slate-200 px-2 py-2 text-right font-bold text-emerald-800 uppercase tracking-wide">Total Amount Payable</td>
