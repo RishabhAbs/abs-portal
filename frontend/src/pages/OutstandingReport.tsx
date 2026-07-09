@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, RotateCcw, Search, X, Columns3 } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, ChevronsUpDown, Filter, RefreshCw, RotateCcw, Search, X, Columns3, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { vouchersApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast/Toast';
 import BillFollowupModal from '../components/Outstanding/BillFollowupModal';
 import UpdateHistoryModal, { HistoryEntry } from '../components/UpdateHistoryModal';
@@ -102,6 +104,7 @@ function defaultFilters() {
 export default function OutstandingReport() {
   const navigate = useNavigate();
   const { showError } = useToast();
+  const { isAdmin } = useAuth();
   const { side: sideParam } = useParams<{ side?: string }>();
   const lockedSide: Side | null = sideParam === 'payable' || sideParam === 'receivable' ? sideParam : null;
 
@@ -345,6 +348,43 @@ export default function OutstandingReport() {
   const headCell = 'border border-slate-400 bg-slate-200 px-2 py-1 text-[0.88em] font-bold text-slate-700 uppercase tracking-wide sticky top-0 z-10';
   const headBtn = 'flex items-center select-none cursor-pointer hover:text-blue-700';
 
+  // Excel export — ADMIN ONLY. Exports the full filtered result set (every
+  // page, current filters/sort applied), not just the visible page. The button
+  // is hidden for non-admins so only admin logins can export the data.
+  const exportExcel = () => {
+    if (!isAdmin() || sorted.length === 0) return;
+    const label = lockedSide === 'payable' ? 'Payables' : lockedSide === 'receivable' ? 'Receivables' : 'Outstanding';
+    const data: Record<string, any>[] = sorted.map((b, i) => ({
+      '#':            i + 1,
+      'Bill Name':    b.bill_name,
+      'Party Name':   b.party_name,
+      'Group':        b.group_name || '',
+      'Reseller':     b.reseller_name || '',
+      'Bill Date':    b.bill_date ? displayDate(b.bill_date) : '',
+      'Age (days)':   b.age_days,
+      'Opening':      b.opening_balance,
+      'Closing':      Math.abs(b.closing_balance),
+      'Dr/Cr':        b.closing_balance > 0 ? 'Dr' : 'Cr',
+      'Status':       b.followup_status || '',
+      'Person Name':  b.followup_person || '',
+      'Number':       b.followup_phone || '',
+      'Next Date':    b.followup_next_date ? displayDate(b.followup_next_date) : '',
+      'Remark':       b.followup_remark || '',
+    }));
+    // Grand-total row at the bottom.
+    data.push({
+      '#': '', 'Bill Name': '', 'Party Name': `GRAND TOTAL — ${sorted.length} bills`,
+      'Group': '', 'Reseller': '', 'Bill Date': '', 'Age (days)': '',
+      'Opening': sorted.reduce((s, b) => s + b.opening_balance, 0),
+      'Closing': sorted.reduce((s, b) => s + Math.abs(b.closing_balance), 0),
+      'Dr/Cr': '', 'Status': '', 'Person Name': '', 'Number': '', 'Next Date': '', 'Remark': '',
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, label);
+    XLSX.writeFile(wb, `${label}-Outstanding-${toInputDate(new Date())}.xlsx`);
+  };
+
   return (
     <div className="flex flex-col w-full fixed left-0 right-0 top-14 bottom-16 sm:static sm:h-full sm:top-auto sm:bottom-auto" style={{ overscrollBehavior: "contain" }}>
 
@@ -392,6 +432,17 @@ export default function OutstandingReport() {
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
+          {/* Excel export — admin only */}
+          {isAdmin() && (
+            <button
+              onClick={exportExcel}
+              disabled={loading || sorted.length === 0}
+              className="p-2 rounded-lg text-emerald-600 hover:bg-emerald-50 disabled:opacity-40"
+              title="Export to Excel (admin only)"
+            >
+              <FileSpreadsheet size={18} />
+            </button>
+          )}
         </div>
       </div>
 

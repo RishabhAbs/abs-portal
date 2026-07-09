@@ -2855,6 +2855,63 @@ export class VouchersService implements OnModuleInit {
         return { ...vch, ledgerEntries, billAllocations };
     }
 
+    /**
+     * Statistics report — mirrors Tally's Statistics screen:
+     *   • Types of Vouchers → every voucher type with its voucher count (+ total)
+     *   • Types of Accounts → master-record counts (groups, ledgers, stock, etc.)
+     * Each count is guarded independently so a table missing on a given DB
+     * instance never breaks the whole report.
+     */
+    async getStatistics() {
+        const safeCount = async (sql: string): Promise<number> => {
+            try {
+                const r = await this.db.queryOne<any>(sql);
+                return Number(r?.cnt || 0);
+            } catch { return 0; }
+        };
+
+        // ── Types of Vouchers ──────────────────────────────────────────────
+        let voucherTypes: { name: string; count: number }[] = [];
+        try {
+            const rows = await this.db.query<any>(`
+                SELECT vt.name AS name, COUNT(vd.id) AS cnt
+                FROM vchtype vt
+                LEFT JOIN vch_details vd ON vd.vch_type_id = vt.id
+                GROUP BY vt.id, vt.name
+                ORDER BY vt.name ASC
+            `);
+            voucherTypes = rows.map((r: any) => ({ name: r.name || '—', count: Number(r.cnt) || 0 }));
+        } catch { voucherTypes = []; }
+        const voucherTotal = voucherTypes.reduce((s, v) => s + v.count, 0);
+
+        // ── Types of Accounts ──────────────────────────────────────────────
+        const groups          = await safeCount(`SELECT COUNT(*) AS cnt FROM ledgergroup`);
+        const ledgers         = await safeCount(`SELECT COUNT(*) AS cnt FROM customer`);
+        const stockGroups     = await safeCount(`SELECT COUNT(*) AS cnt FROM item_groups`);
+        const stockItems      = await safeCount(`SELECT COUNT(*) AS cnt FROM items`);
+        const itemCategories  = await safeCount(`SELECT COUNT(*) AS cnt FROM item_categories`);
+        const voucherTypeCount = await safeCount(`SELECT COUNT(*) AS cnt FROM vchtype`);
+        // No dedicated Units / Currencies master on this instance — fall back to
+        // distinct item units if the column exists, else the standard single
+        // unit / single currency (INR).
+        let units = await safeCount(`SELECT COUNT(DISTINCT unit) AS cnt FROM items WHERE unit IS NOT NULL AND unit <> ''`);
+        if (!units) units = 1;
+        const currencies = 1;
+
+        const accounts = [
+            { label: 'Groups',          count: groups },
+            { label: 'Ledgers',         count: ledgers },
+            { label: 'Stock Groups',    count: stockGroups },
+            { label: 'Stock Items',     count: stockItems },
+            { label: 'Item Categories', count: itemCategories },
+            { label: 'Voucher Types',   count: voucherTypeCount },
+            { label: 'Units',           count: units },
+            { label: 'Currencies',      count: currencies },
+        ];
+
+        return { voucherTypes, voucherTotal, accounts };
+    }
+
     /** Resolve the effective prefix/suffix particulars for a vch_type on a given date. */
     private async resolveAffixes(vchTypeId: number, forDate?: string): Promise<{ prefix: string; suffix: string }> {
         const today = forDate || new Date().toISOString().split('T')[0];

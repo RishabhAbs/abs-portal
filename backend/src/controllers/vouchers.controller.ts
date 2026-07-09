@@ -390,6 +390,14 @@ export class VouchersController {
         return { success: true, data };
     }
 
+    @Get('statistics')
+    @ApiOperation({ summary: 'Statistics — voucher-type counts + account-type counts' })
+    @RequireAnyPermission({ entity: 'reports_statistics', action: 'view' })
+    async getStatistics() {
+        const data = await this.vouchersService.getStatistics();
+        return { success: true, data };
+    }
+
     @Get('bill-followup/history')
     @ApiOperation({ summary: 'Full followup interaction log for one outstanding bill' })
     @RequireAnyPermission(

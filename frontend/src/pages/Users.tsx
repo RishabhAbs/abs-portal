@@ -78,6 +78,7 @@ const Users: React.FC = () => {
     reports_group_summary:    { view: false },
     reports_stock_summary:    { view: false },
     reports_user_outstanding: { view: false },
+    reports_statistics: { view: false },
     reports_bill_payment: { view: false, create: false, edit: false, delete: false },
     resellers: { view: false, create: false, edit: false, delete: false },
     group_change: { view: false, edit_group: false, edit_reseller: false },
@@ -216,6 +217,7 @@ const Users: React.FC = () => {
       reports_group_summary:    { ...defaultPerms.reports_group_summary,    ...u.permissions?.reports_group_summary },
       reports_stock_summary:    { ...defaultPerms.reports_stock_summary,    ...u.permissions?.reports_stock_summary },
       reports_user_outstanding: { ...defaultPerms.reports_user_outstanding, ...u.permissions?.reports_user_outstanding },
+      reports_statistics: { ...defaultPerms.reports_statistics, ...u.permissions?.reports_statistics },
       reports_bill_payment: { ...defaultPerms.reports_bill_payment,    ...u.permissions?.reports_bill_payment },
       resellers:           { ...defaultPerms.resellers,            ...u.permissions?.resellers },
       group_change:        { ...defaultPerms.group_change,         ...u.permissions?.group_change },
@@ -699,6 +701,12 @@ const Users: React.FC = () => {
         { name: 'Add',    action: 'create' },
         { name: 'Edit',   action: 'edit' },
         { name: 'Delete', action: 'delete' },
+      ]
+    },
+    {
+      module: 'reports_statistics', label: 'Statistics',
+      features: [
+        { name: 'View', action: 'view' },
       ]
     },
     // ── Administration ────────────────────────────────────────────────────────

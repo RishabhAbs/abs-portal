@@ -199,6 +199,7 @@ const Layout: React.FC = () => {
           ]
         },
         { label: 'User-wise Outstanding',path: '/reports/user-outstanding', entity: ['reports_user_outstanding', 'reports_outstanding'] as EntityType[], icon: <UsersIcon className="h-4 w-4" /> },
+        { label: 'Statistics',           path: '/reports/statistics',       entity: 'reports_statistics' as EntityType,       icon: <BarChart2 className="h-4 w-4" /> },
         { label: 'Ledger Report',        path: '/reports/ledger',           entity: 'reports_ledger' as EntityType,           icon: <FileText className="h-4 w-4" /> },
         { label: 'Day Book',             path: '/billing/daybook',          entity: 'reports_daybook' as EntityType,          icon: <FileText className="h-4 w-4" /> },
         { label: 'Pending Review',       path: '/billing/pending-review',   entity: ['reports_daybook', 'vouchers'] as EntityType[], icon: <CheckCircle className="h-4 w-4" /> },
@@ -747,6 +748,7 @@ const Layout: React.FC = () => {
                   { label: 'Outstanding · Payable',    path: '/reports/outstanding/payable',    entity: 'reports_outstanding' as any, icon: <FileText className="h-4 w-4" /> },
                   { label: 'Outstanding · Receivable', path: '/reports/outstanding/receivable', entity: 'reports_outstanding' as any, icon: <FileText className="h-4 w-4" /> },
                   { label: 'User-wise Outstanding', path: '/reports/user-outstanding', entity: 'reports_user_outstanding' as any, icon: <UsersIcon className="h-4 w-4" /> },
+                  { label: 'Statistics',            path: '/reports/statistics',       entity: 'reports_statistics' as any,    icon: <BarChart2 className="h-4 w-4" /> },
                   { label: 'Ledger Report',         path: '/reports/ledger',           entity: 'reports_ledger' as any,        icon: <FileText className="h-4 w-4" /> },
                   { label: 'Day Book',              path: '/billing/daybook',          entity: 'reports_daybook' as any,       icon: <FileText className="h-4 w-4" /> },
                   { label: 'Sales Register',        path: '/reports/sales-register',   entity: 'reports_sales_register' as any, icon: <Receipt className="h-4 w-4" /> },

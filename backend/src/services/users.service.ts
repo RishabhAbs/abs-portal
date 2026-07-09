@@ -57,6 +57,8 @@ export interface UserPermissions {
   reports_group_summary:    { view: boolean };
   reports_stock_summary:    { view: boolean };
   reports_user_outstanding: { view: boolean };
+  // Statistics report — voucher-type + account-type counts.
+  reports_statistics: { view: boolean };
   // Bill Report + Payment Report (Billing module). Their own permission so an
   // admin can grant these two reports without the broader `activities` perm.
   reports_bill_payment: { view: boolean; create: boolean; edit: boolean; delete: boolean };
@@ -189,6 +191,7 @@ const defaultUserPermissions: UserPermissions = {
   reports_group_summary:    { view: false },
   reports_stock_summary:    { view: false },
   reports_user_outstanding: { view: false },
+  reports_statistics: { view: false },
   reports_bill_payment: { view: false, create: false, edit: false, delete: false },
   server_monitor: { view: false, create: false, edit: false, delete: false },
   group_transfer: { view: false, create: false, edit: false, delete: false },
@@ -229,6 +232,7 @@ const adminPermissions: UserPermissions = {
   reports_group_summary:    { view: true },
   reports_stock_summary:    { view: true },
   reports_user_outstanding: { view: true },
+  reports_statistics: { view: true },
   reports_bill_payment: { view: true, create: true, edit: true, delete: true },
   server_monitor: { view: true, create: true, edit: true, delete: true },
   group_transfer: { view: true, create: true, edit: true, delete: true },

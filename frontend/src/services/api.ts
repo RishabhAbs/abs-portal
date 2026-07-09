@@ -1062,6 +1062,12 @@ export const vouchersApi = {
     if (params.search)    q.append('search', params.search);
     return fetchApi<{ success: boolean; data: { rows: any[]; totals: any } }>(`/vouchers/stock-summary?${q.toString()}`);
   },
+  // Statistics report — voucher-type counts + account-type counts.
+  getStatistics: () => fetchApi<{ success: boolean; data: {
+    voucherTypes: { name: string; count: number }[];
+    voucherTotal: number;
+    accounts: { label: string; count: number }[];
+  } }>(`/vouchers/statistics`),
   getStockGroupSummary: (params: { date_from?: string; date_to?: string; search?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.date_from) q.append('date_from', params.date_from);
