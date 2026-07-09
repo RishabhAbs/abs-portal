@@ -1,0 +1,106 @@
+name: Build & Deploy to cPanel
+
+# Auto-runs on every push to main. Builds backend + frontend on the GitHub
+# runner (NOT on the shared host), assembles the exact deploy layout, and
+# force-pushes it to the `deploy` branch. cPanel's Git Version Control then
+# pulls `deploy` and runs .cpanel.yml to place files + restart PM2.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+# Never let two deploys race each other.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # allow force-pushing the deploy branch with GITHUB_TOKEN
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source (main)
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ── Build backend (NestJS → backend/dist) ─────────────────────────────
+      - name: Install & build backend
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      # ── Build frontend (CRA → frontend/build) ─────────────────────────────
+      - name: Install & build frontend
+        working-directory: frontend
+        env:
+          CI: false                       # treat lint warnings as warnings, not errors
+          REACT_APP_ENABLE_SECURITY: "true"
+        run: |
+          npm ci
+          npm run build
+
+      # ── Assemble the deploy tree (mirrors the cPanel layout) ──────────────
+      #   deploy/
+      #   ├── .cpanel.yml
+      #   ├── public/    → frontend build + .htaccess  (served at web root)
+      #   └── backend/   → dist + package.json + package-lock.json
+      - name: Assemble deploy tree
+        run: |
+          rm -rf deploy_out
+          mkdir -p deploy_out/public deploy_out/backend
+
+          # Frontend → public/
+          cp -R frontend/build/. deploy_out/public/
+          cp .htaccess deploy_out/public/.htaccess
+
+          # Backend → backend/ (prod artifacts only)
+          cp -R backend/dist deploy_out/backend/dist
+          cp backend/package-lock.json deploy_out/backend/package-lock.json
+          # Strip devDependencies + pin the start script for production
+          node -e "const p=require('./backend/package.json'); delete p.devDependencies; p.scripts={start:'node dist/src/main.js'}; require('fs').writeFileSync('deploy_out/backend/package.json', JSON.stringify(p,null,2));"
+
+          # Deployment recipe at the deploy-branch root
+          cp .ci/cpanel.yml deploy_out/.cpanel.yml
+
+      # ── Publish to the `deploy` branch (orphan, always overwritten) ───────
+      - name: Publish deploy branch
+        run: |
+          cd deploy_out
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b deploy
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" deploy
+
+      # ── (Optional) Trigger cPanel to pull + deploy automatically ──────────
+      # If the CPANEL_* repo secrets are set, this tells cPanel to fetch the
+      # deploy branch and run .cpanel.yml right away. If not set, it's skipped
+      # and you deploy with one click in cPanel → Git Version Control.
+      - name: Trigger cPanel deployment
+        continue-on-error: true
+        env:
+          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USER }}
+          CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
+          CPANEL_REPO_ROOT: ${{ secrets.CPANEL_REPO_ROOT }}
+        run: |
+          if [ -z "$CPANEL_HOST" ]; then
+            echo "No CPANEL_* secrets set - skipping auto-trigger. Deploy manually in cPanel → Git Version Control → Manage → Deploy HEAD Commit."
+            exit 0
+          fi
+          AUTH="Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}"
+          echo "Pulling deploy branch into cPanel repo..."
+          curl -sS -H "$AUTH" \
+            "https://${CPANEL_HOST}:2083/execute/VersionControl/update?repository_root=${CPANEL_REPO_ROOT}&branch=deploy" || true
+          echo "Deploying HEAD (runs .cpanel.yml)..."
+          curl -sS -H "$AUTH" \
+            "https://${CPANEL_HOST}:2083/execute/VersionControlDeployment/create?repository_root=${CPANEL_REPO_ROOT}"

@@ -299,6 +299,8 @@ export const resellersApi = {
 
 export const groupChangeApi = {
   getUsers: () => fetchApi<{ success: boolean; data: any[] }>('/group-change/users'),
+  // Combined cloud + legacy groupings sourced from the customer table (with counts).
+  getCustomerGroups: () => fetchApi<{ success: boolean; data: any[] }>('/group-change/customer-groups'),
   getCustomers: (userId: string) => fetchApi<{ success: boolean; data: any[] }>(`/group-change/customers?userId=${userId}`),
   transfer: (customerIds: number[], toUserId: string) =>
     fetchApi<{ success: boolean; transferred: number; message: string }>('/group-change/transfer', {
@@ -315,13 +317,13 @@ export const groupChangeApi = {
     fetchApi<{ success: boolean; data: any[]; total: number }>(`/group-change/history?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}`),
   // Ledger group transfer helpers
   getLedgerGroups: () => fetchApi<{ success: boolean; data: any[] }>(`/ledger-groups`),
-  transferLedgerGroup: (oldGroupId: string, newLedgerGroupId: number, resellerId?: number | null) =>
+  transferLedgerGroup: (oldGroupId: string, newLedgerGroupId: number, resellerId?: number | null, groupType: 'cloud' | 'group' = 'cloud') =>
     fetchApi<{ success: boolean; transferred: number; resellerUpdated?: number; message: string }>('/group-change/transfer-ledger-group', {
       method: 'POST',
-      body: JSON.stringify({ oldGroupId, newLedgerGroupId, resellerId }),
+      body: JSON.stringify({ oldGroupId, newLedgerGroupId, resellerId, groupType }),
     }),
-  previewLedgerGroup: (oldGroupId: string, limit: number = 200, resellerId?: number | null) =>
-    fetchApi<{ success: boolean; total: number; rows: any[] }>(`/group-change/preview-ledger-group?oldGroupId=${encodeURIComponent(oldGroupId)}&limit=${limit}${resellerId ? `&resellerId=${resellerId}` : ''}`),
+  previewLedgerGroup: (oldGroupId: string, limit: number = 200, resellerId?: number | null, groupType: 'cloud' | 'group' = 'cloud') =>
+    fetchApi<{ success: boolean; total: number; rows: any[] }>(`/group-change/preview-ledger-group?oldGroupId=${encodeURIComponent(oldGroupId)}&limit=${limit}&groupType=${groupType}${resellerId ? `&resellerId=${resellerId}` : ''}`),
 };
 
 // Customers API

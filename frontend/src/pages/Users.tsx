@@ -78,9 +78,11 @@ const Users: React.FC = () => {
     reports_group_summary:    { view: false },
     reports_stock_summary:    { view: false },
     reports_user_outstanding: { view: false },
+    reports_bill_payment: { view: false, create: false, edit: false, delete: false },
     resellers: { view: false, create: false, edit: false, delete: false },
     group_change: { view: false, edit_group: false, edit_reseller: false },
-    server_monitor: { view: false, edit: false },
+    group_transfer: { view: false, create: false, edit: false, delete: false },
+    server_monitor: { view: false, create: false, edit: false, delete: false },
   };
   const [formPerms, setFormPerms] = useState<UserPermissions>(defaultPerms);
 
@@ -214,8 +216,10 @@ const Users: React.FC = () => {
       reports_group_summary:    { ...defaultPerms.reports_group_summary,    ...u.permissions?.reports_group_summary },
       reports_stock_summary:    { ...defaultPerms.reports_stock_summary,    ...u.permissions?.reports_stock_summary },
       reports_user_outstanding: { ...defaultPerms.reports_user_outstanding, ...u.permissions?.reports_user_outstanding },
+      reports_bill_payment: { ...defaultPerms.reports_bill_payment,    ...u.permissions?.reports_bill_payment },
       resellers:           { ...defaultPerms.resellers,            ...u.permissions?.resellers },
       group_change:        { ...defaultPerms.group_change,         ...u.permissions?.group_change },
+      group_transfer:      { ...defaultPerms.group_transfer,       ...u.permissions?.group_transfer },
       server_monitor:      { ...defaultPerms.server_monitor,       ...u.permissions?.server_monitor },
     });
     // Load column permissions
@@ -482,8 +486,10 @@ const Users: React.FC = () => {
     {
       module: 'server_monitor', label: 'Server Monitor', sectionHeader: undefined,
       features: [
-        { name: 'View',           action: 'view' },
+        { name: 'View',   action: 'view' },
+        { name: 'Add',    action: 'create' },
         { name: 'Edit (Port/Active/Sync)', action: 'edit' },
+        { name: 'Delete', action: 'delete' },
       ]
     },
     {
@@ -686,6 +692,15 @@ const Users: React.FC = () => {
         { name: 'View', action: 'view' },
       ]
     },
+    {
+      module: 'reports_bill_payment', label: 'Bill & Payment Reports',
+      features: [
+        { name: 'View',   action: 'view' },
+        { name: 'Add',    action: 'create' },
+        { name: 'Edit',   action: 'edit' },
+        { name: 'Delete', action: 'delete' },
+      ]
+    },
     // ── Administration ────────────────────────────────────────────────────────
     {
       module: 'resellers', label: 'Resellers (Master)', sectionHeader: 'Administration',
@@ -702,6 +717,15 @@ const Users: React.FC = () => {
         { name: 'View',          action: 'view' },
         { name: 'Edit Group',    action: 'edit_group' },
         { name: 'Edit Reseller', action: 'edit_reseller' },
+      ]
+    },
+    {
+      module: 'group_transfer', label: 'Group Transfer (Ledger Group)',
+      features: [
+        { name: 'View',            action: 'view' },
+        { name: 'Add',             action: 'create' },
+        { name: 'Edit (Transfer)', action: 'edit' },
+        { name: 'Delete',          action: 'delete' },
       ]
     },
     {

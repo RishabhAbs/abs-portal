@@ -67,6 +67,41 @@ export class GroupChangeService implements OnModuleInit {
   }
 
   /**
+   * Distinct customer groupings that actually exist in the `customer` table,
+   * combined into one list for the Group Transfer "Old Group" dropdown:
+   *   - type 'cloud' → grouped by cloud_group_id (handler); name from cloud_users
+   *   - type 'group' → grouped by the legacy `group` column (old admin id);
+   *                    name resolved via cloud_users.old_id when possible
+   * Each row carries `cnt` = number of customers, so the UI shows real counts.
+   */
+  async getCustomerGroups(): Promise<any[]> {
+    try {
+      const cloud = await this.db.query<any>(`
+        SELECT 'cloud' AS type, c.cloud_group_id AS id, cu.name AS name, COUNT(*) AS cnt
+        FROM customer c
+        JOIN cloud_users cu ON cu.id = c.cloud_group_id
+        WHERE c.cloud_group_id IS NOT NULL AND c.cloud_group_id <> ''
+        GROUP BY c.cloud_group_id, cu.name
+        ORDER BY cu.name ASC
+      `);
+      const legacy = await this.db.query<any>(`
+        SELECT 'group' AS type, c.\`group\` AS id,
+               COALESCE(cu.name, CONCAT('Group ', c.\`group\`)) AS name,
+               COUNT(*) AS cnt
+        FROM customer c
+        LEFT JOIN cloud_users cu ON cu.old_id = c.\`group\`
+        WHERE c.\`group\` IS NOT NULL AND c.\`group\` <> '' AND c.\`group\` <> '0'
+        GROUP BY c.\`group\`, cu.name
+        ORDER BY name ASC
+      `);
+      return [...cloud, ...legacy];
+    } catch (e) {
+      console.error('GroupChangeService.getCustomerGroups error:', e.message);
+      return [];
+    }
+  }
+
+  /**
    * Get customers assigned to a specific cloud user
    */
   async getCustomersByUser(userId: string): Promise<any[]> {
@@ -215,17 +250,21 @@ export class GroupChangeService implements OnModuleInit {
    * group. This overwrites the existing `ledgergroup` column (no separate
    * LedGroup column is used) so downstream reports/readers see the new value.
    */
-  async transferLedgerGroup(oldGroupId: string, newLedgerGroupId: number, changedBy: string, resellerId?: number | null): Promise<{ transferred: number; resellerUpdated?: number }> {
-    if (!oldGroupId) throw new BadRequestException('Old group id is required');
+  async transferLedgerGroup(oldGroupId: string, newLedgerGroupId: number, changedBy: string, resellerId?: number | null, groupType: 'cloud' | 'group' = 'cloud'): Promise<{ transferred: number; resellerUpdated?: number }> {
     if (!newLedgerGroupId) throw new BadRequestException('Target ledger group id is required');
 
-    // Build selector depending on optional reseller filter
-    let selectorSql = `WHERE cloud_group_id = ?`;
-    const selectorParams: any[] = [oldGroupId];
-    if (resellerId !== undefined && resellerId !== null) {
-      selectorSql += ` AND resellerid = ?`;
-      selectorParams.push(resellerId);
-    }
+    // Whitelist the grouping column so `groupType` can never inject SQL.
+    const col = groupType === 'group' ? '`group`' : 'cloud_group_id';
+
+    // Build selector from whichever filters are supplied: old group and/or
+    // reseller. Reseller alone is allowed — transfer every customer of that
+    // reseller regardless of their old group.
+    const conditions: string[] = [];
+    const selectorParams: any[] = [];
+    if (oldGroupId) { conditions.push(`${col} = ?`); selectorParams.push(oldGroupId); }
+    if (resellerId !== undefined && resellerId !== null) { conditions.push(`resellerid = ?`); selectorParams.push(resellerId); }
+    if (conditions.length === 0) throw new BadRequestException('Select an old group or a reseller');
+    const selectorSql = `WHERE ${conditions.join(' AND ')}`;
 
     // Find customers matching the selector
     const customers = await this.db.query<any>(`SELECT id, company FROM customer ${selectorSql}`, selectorParams);
@@ -248,14 +287,16 @@ export class GroupChangeService implements OnModuleInit {
    * Return a preview list of customers that would be affected by a
    * ledger-group transfer for the given oldGroupId. Limited by `limit`.
    */
-  async previewLedgerGroup(oldGroupId: string, limit: number = 200, resellerId?: number | null): Promise<{ total: number; rows: any[] }> {
-    if (!oldGroupId) return { total: 0, rows: [] };
-    let selectorSql = `WHERE cloud_group_id = ?`;
-    const params: any[] = [oldGroupId];
-    if (resellerId !== undefined && resellerId !== null) {
-      selectorSql += ` AND resellerid = ?`;
-      params.push(resellerId);
-    }
+  async previewLedgerGroup(oldGroupId: string, limit: number = 200, resellerId?: number | null, groupType: 'cloud' | 'group' = 'cloud'): Promise<{ total: number; rows: any[] }> {
+    // Whitelist the grouping column so `groupType` can never inject SQL.
+    const col = groupType === 'group' ? '`group`' : 'cloud_group_id';
+    // Accept old group and/or reseller; reseller alone is allowed.
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (oldGroupId) { conditions.push(`${col} = ?`); params.push(oldGroupId); }
+    if (resellerId !== undefined && resellerId !== null) { conditions.push(`resellerid = ?`); params.push(resellerId); }
+    if (conditions.length === 0) return { total: 0, rows: [] };
+    const selectorSql = `WHERE ${conditions.join(' AND ')}`;
 
     const rows = await this.db.query<any>(`
       SELECT id, company, cloud_group_id, ledgergroup, resellerid

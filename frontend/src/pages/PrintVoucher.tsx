@@ -271,6 +271,7 @@ export default function PrintVoucher() {
     payment_terms:    'Due within 15 Days',
     executive_name:   '',
     executive_phone:  '',
+    remark:           '',
   });
   // Bill To (the buyer) — pre-filled from the customer master columns we
   // join on findById, but every field is overrideable from the sidebar so
@@ -300,6 +301,7 @@ export default function PrintVoucher() {
       payment_terms:    'Due within 15 Days',
       executive_name:   '',
       executive_phone:  '',
+      remark:           voucher.remark || '',
     });
     // Seed Bill To from whatever the voucher payload carried (just the
     // company name in the current backend), then fetch the full customer
@@ -323,22 +325,25 @@ export default function PrintVoucher() {
         .then(res => {
           if (!res?.success || !res.data) return;
           const c = res.data;
-          setBillTo({
-            name:     c.company         || voucher.party_name || '',
-            address1: c.address1        || '',
-            address2: c.address2        || '',
+          // Merge over the voucher-seeded values — only overwrite a field when
+          // the customer record actually has a value, so a partial or empty
+          // customer response never wipes billing details the voucher provided.
+          setBillTo(prev => ({
+            name:     c.company         || prev.name,
+            address1: c.address1        || prev.address1,
+            address2: c.address2        || prev.address2,
             // pincode_city is the joined name from the pincode table; fall
             // back to the raw c.city column the customer master sets.
-            city:     c.pincode_city    || c.city || '',
-            state:    c.state_name      || c.state || '',
-            pincode:  c.pincode ? String(c.pincode) : '',
-            gstin:    c.gstin           || '',
-            phone:    c.mobile ? String(c.mobile) : '',
-            email:    c.email           || '',
-            contact:  c.person          || c.contact_person || '',
-          });
+            city:     c.pincode_city    || c.city || prev.city,
+            state:    c.state_name      || c.state || prev.state,
+            pincode:  c.pincode ? String(c.pincode) : prev.pincode,
+            gstin:    c.gstin           || prev.gstin,
+            phone:    c.mobile ? String(c.mobile) : prev.phone,
+            email:    c.email           || prev.email,
+            contact:  c.person          || c.contact_person || prev.contact,
+          }));
         })
-        .catch(() => { /* fall back to whatever voucher payload had */ });
+        .catch(() => { /* keep the voucher-provided billing details */ });
     }
   }, [voucher]);
 
@@ -407,20 +412,41 @@ export default function PrintVoucher() {
   };
 
   const invoiceRef = useRef<HTMLDivElement>(null);
+
+  // Render the PDF from a detached deep-clone of the invoice — never the live,
+  // React-managed node. html2pdf/html2canvas relocate + restyle whatever element
+  // you hand them; letting that touch the live node (which also sits inside a
+  // scrollable container) made the *second* download come out wrong, because
+  // stale styles / scroll state carried over from the first run. Cloning per
+  // call guarantees every download starts from the same pristine markup.
+  const cloneInvoiceForRender = () => {
+    const src = invoiceRef.current!;
+    const clone = src.cloneNode(true) as HTMLElement;
+    const holder = document.createElement('div');
+    holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${src.offsetWidth}px;background:#fff;`;
+    holder.appendChild(clone);
+    document.body.appendChild(holder);
+    return { clone, cleanup: () => { try { document.body.removeChild(holder); } catch { /* already gone */ } } };
+  };
+
+  const pdfOptions = (filename?: string) => ({
+    margin: 0,
+    ...(filename ? { filename } : {}),
+    image: { type: 'jpeg' as const, quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, logging: false },
+    jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+  });
+
   const handleDownload = async () => {
     if (!voucher || !invoiceRef.current) return;
     const html2pdf = (await import('html2pdf.js')).default;
     const filename = `Invoice-${voucher.vch_no || voucher.id}.pdf`;
-    html2pdf()
-      .set({
-        margin: 0,
-        filename,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      })
-      .from(invoiceRef.current)
-      .save();
+    const { clone, cleanup } = cloneInvoiceForRender();
+    try {
+      await html2pdf().set(pdfOptions(filename)).from(clone).save();
+    } finally {
+      cleanup();
+    }
   };
 
   // Auto-download when navigated with ?download=1
@@ -437,19 +463,16 @@ export default function PrintVoucher() {
   useEffect(() => {
     if (searchParams.get('share') !== '1' || !voucher || !invoiceRef.current || shareRanRef.current) return;
     shareRanRef.current = true;
-    const invoiceEl = invoiceRef.current;
     (async () => {
       try {
         const html2pdf = (await import('html2pdf.js')).default;
-        const blob: Blob = await html2pdf()
-          .set({
-            margin: 0,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true, logging: false },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-          })
-          .from(invoiceEl)
-          .outputPdf('blob');
+        const { clone, cleanup } = cloneInvoiceForRender();
+        let blob: Blob;
+        try {
+          blob = await html2pdf().set(pdfOptions()).from(clone).outputPdf('blob');
+        } finally {
+          cleanup();
+        }
         const { vouchersApi: va } = await import('../services/api');
         const res = await va.uploadSharePdf(Number(voucher.id), blob);
         window.parent?.postMessage({
@@ -672,6 +695,7 @@ export default function PrintVoucher() {
                 </label>
                 <Input label="Payment Terms" value={meta.payment_terms} onChange={v => setMeta(m => ({ ...m, payment_terms: v }))} />
               </Row>
+              <Input label="Remark" value={meta.remark} onChange={v => setMeta(m => ({ ...m, remark: v }))} />
             </Section>
 
             {/* Bill To — pre-filled from the customer record but every field
@@ -1239,6 +1263,14 @@ function InvoicePreview({
             <div><span className="text-slate-500">Bank Name</span> : <span className="font-medium">{bank.bank_name}</span></div>
             <div><span className="text-slate-500">IFSC Code</span> : <span className="font-medium">{bank.ifsc}</span></div>
           </div>
+        </div>
+
+        {/* Remark — ALWAYS shown (required checklist field); sits under the
+            Amount-in-Words / bank block and above Terms. Filled from the
+            voucher's saved remark, or type one in the editor's Remark field. */}
+        <div className="border border-slate-200 rounded mb-3 px-3 py-2 text-[11px]">
+          <span className="font-bold text-slate-700 uppercase">Remark: </span>
+          <span className="text-slate-800 font-medium">{meta.remark || '—'}</span>
         </div>
 
         {/* Footer: terms | sign */}
