@@ -432,7 +432,9 @@ const Vouchers: React.FC = () => {
 
   const handleDirectDownload = (id: number | string) => {
     const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+    // Real (offscreen) size — a 1×1 iframe collapses the invoice layout and
+    // the generated PDF comes out stretched/distorted.
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:900px;height:1200px;border:none;';
     iframe.src = `/billing/print-voucher/${id}?download=1`;
     document.body.appendChild(iframe);
     setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 30000);

@@ -453,7 +453,15 @@ export default function PrintVoucher() {
     const src = invoiceRef.current!;
     const clone = src.cloneNode(true) as HTMLElement;
     const holder = document.createElement('div');
-    holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${src.offsetWidth}px;background:#fff;`;
+    // Render at a FIXED A4-proportioned width, never the live node's
+    // offsetWidth — inside the hidden download/share iframe that width is
+    // near zero, and a collapsed clone is exactly what produced the
+    // stretched, distorted PDFs. 794px = A4 width at 96dpi.
+    const A4_PX = 794;
+    holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${A4_PX}px;background:#fff;`;
+    clone.style.width = `${A4_PX}px`;
+    clone.style.maxWidth = `${A4_PX}px`;
+    clone.style.margin = '0';
     holder.appendChild(clone);
     document.body.appendChild(holder);
     return { clone, cleanup: () => { try { document.body.removeChild(holder); } catch { /* already gone */ } } };
@@ -689,8 +697,11 @@ export default function PrintVoucher() {
           )}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-3 p-3 overflow-hidden print:p-0 print:gap-0 print:block">
-          {/* ── LEFT: Editor panel ── */}
+        <div className="flex-1 min-h-0 grid grid-cols-1 gap-3 p-3 overflow-hidden print:p-0 print:gap-0 print:block">
+          {/* Editor panel intentionally removed — the invoice is read-only.
+              Everything renders from the voucher + customer record; company
+              details / bank / terms come from the saved defaults. */}
+          {false && (
           <div className="no-print overflow-auto bg-white border border-slate-300 rounded p-3 space-y-4 print:hidden">
             <Section title="Company">
               <Input label="Name" value={company.name} onChange={v => setCompany(c => ({ ...c, name: v }))} />
@@ -842,10 +853,11 @@ export default function PrintVoucher() {
               </button>
             </Section>
           </div>
+          )}
 
-          {/* ── RIGHT: Invoice preview ── */}
+          {/* ── Invoice preview (read-only) ── */}
           <div className="overflow-auto print:overflow-visible">
-            <div ref={invoiceRef}>
+            <div ref={invoiceRef} className="max-w-[860px] mx-auto">
               <InvoicePreview
                 company={company}
                 voucher={voucher}
