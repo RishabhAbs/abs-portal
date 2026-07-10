@@ -1516,6 +1516,7 @@ export class VouchersService implements OnModuleInit {
                        ) AS rn
                 FROM bill_allocation ba
                 LEFT JOIN vch_details v ON ba.vchid = v.id
+                WHERE ba.billname IS NOT NULL AND TRIM(ba.billname) <> ''
              ),
              bills AS (
                 SELECT r.ledger,
@@ -2202,6 +2203,12 @@ export class VouchersService implements OnModuleInit {
         // Inside the CTE we only cap by upperBound. dateFrom is applied AFTER
         // aggregation so a fully-settled bill (sum=0) cleanly drops out
         // regardless of how the user picked their date window.
+        // "On Account" allocations carry no bill reference (billname NULL) —
+        // they're unallocated by design and don't belong in a bill-wise
+        // outstanding list, otherwise they show as a phantom "—" bill. To
+        // make an amount reduce a real bill, allocate it Agr. against that
+        // bill instead of On Account.
+        where.push("ba.billname IS NOT NULL AND TRIM(ba.billname) <> ''");
         if (upperBound)    { where.push('COALESCE(v.vch_date, ba.bill_date) <= ?'); params.push(upperBound); }
         if (opts.billName) { where.push('ba.billname LIKE ?'); params.push(`%${opts.billName}%`); }
         if (opts.search)   { where.push('c.company LIKE ?');   params.push(`%${opts.search}%`); }
