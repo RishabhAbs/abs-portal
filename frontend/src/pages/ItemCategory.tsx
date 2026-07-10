@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, X, ChevronDown, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, ChevronDown, Search, Power } from 'lucide-react';
 import { itemsApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
@@ -101,6 +101,14 @@ const ItemCategory: React.FC = () => {
     finally { setDeleting(false); }
   };
 
+  const toggleActive = async (c: any) => {
+    const next = !(Number(c.active) !== 0);
+    try {
+      const res = await itemsApi.setCategoryActive(c.id, next);
+      if (res.success) { showSuccess('Success', next ? 'Activated' : 'Deactivated'); fetchCategories(); }
+    } catch (e: any) { showError('Error', e.message || 'Failed'); }
+  };
+
   const parentOptions = categories.filter(c =>
     (!editing || c.id !== editing.id) &&
     c.name.toLowerCase().includes(form.parent_search.toLowerCase())
@@ -162,7 +170,9 @@ const ItemCategory: React.FC = () => {
                   {paginated.map((c, idx) => (
                     <tr key={c.id} className="border-t border-gray-100 hover:bg-gray-50">
                       <td className="py-2.5 px-3 text-gray-400">{(page - 1) * PAGE_SIZE + idx + 1}</td>
-                      <td className="py-2.5 px-3 font-medium text-gray-800">{c.name}</td>
+                      <td className="py-2.5 px-3 font-medium text-gray-800">{c.name}
+                        {Number((c as any).active) === 0 && <span className="ml-2 text-[10px] font-bold uppercase bg-gray-200 text-gray-500 rounded px-1.5 py-0.5">Inactive</span>}
+                      </td>
                       <td className="py-2.5 px-3 text-gray-500">
                         {c.parent_name || <span className="text-xs text-gray-400 italic">Primary</span>}
                       </td>
@@ -175,8 +185,9 @@ const ItemCategory: React.FC = () => {
                         <div className="flex justify-center gap-2">
                           {canMod && <button onClick={() => openEdit(c)} title="Edit"
                             className="text-blue-500 hover:text-blue-700 p-1"><Pencil size={15} /></button>}
-                          {canDel && <button onClick={() => setDeleteTarget(c)} title="Delete"
-                            className="text-red-400 hover:text-red-600 p-1"><Trash2 size={15} /></button>}
+                          {canEdit('items') && <button onClick={() => toggleActive(c)}
+                            title={Number((c as any).active) !== 0 ? 'Deactivate' : 'Activate'}
+                            className={`${Number((c as any).active) !== 0 ? 'text-amber-500 hover:text-amber-700' : 'text-emerald-500 hover:text-emerald-700'} p-1`}><Power size={15} /></button>}
                           {!canMod && !canDel && <span className="text-gray-300 text-xs italic">View only</span>}
                         </div>
                       </td>

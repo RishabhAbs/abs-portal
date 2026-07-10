@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, X, ChevronDown, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, ChevronDown, Search, Power } from 'lucide-react';
 import { ledgerGroupApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
@@ -100,6 +100,14 @@ const LedgerGroup: React.FC = () => {
     finally { setDeleting(false); }
   };
 
+  const toggleActive = async (g: any) => {
+    const next = !(Number(g.active) !== 0);
+    try {
+      const res = await ledgerGroupApi.setActive(g.id, next);
+      if (res.success) { showSuccess('Success', next ? 'Activated' : 'Deactivated'); fetchGroups(); }
+    } catch (e: any) { showError('Error', e.message || 'Failed'); }
+  };
+
   const parentOptions = groups.filter(g =>
     (!editing || g.id !== editing.id) &&
     g.name.toLowerCase().includes(form.parent_search.toLowerCase())
@@ -161,7 +169,9 @@ const LedgerGroup: React.FC = () => {
                   {paginated.map((g, idx) => (
                     <tr key={g.id} className="border-t border-gray-100 hover:bg-gray-50">
                       <td className="py-2.5 px-3 text-gray-400">{(page - 1) * PAGE_SIZE + idx + 1}</td>
-                      <td className="py-2.5 px-3 font-medium text-gray-800">{g.name}</td>
+                      <td className="py-2.5 px-3 font-medium text-gray-800">{g.name}
+                        {Number((g as any).active) === 0 && <span className="ml-2 text-[10px] font-bold uppercase bg-gray-200 text-gray-500 rounded px-1.5 py-0.5">Inactive</span>}
+                      </td>
                       <td className="py-2.5 px-3 text-gray-500">
                         {g.parent_name || <span className="text-xs text-gray-400 italic">Primary</span>}
                       </td>
@@ -169,8 +179,9 @@ const LedgerGroup: React.FC = () => {
                         <div className="flex justify-center gap-2">
                           {canMod && <button onClick={() => openEdit(g)} title="Edit"
                             className="text-blue-500 hover:text-blue-700 p-1"><Pencil size={15} /></button>}
-                          {canDel && <button onClick={() => setDeleteTarget(g)} title="Delete"
-                            className="text-red-400 hover:text-red-600 p-1"><Trash2 size={15} /></button>}
+                          {canEdit('ledger_groups') && <button onClick={() => toggleActive(g)}
+                            title={Number((g as any).active) !== 0 ? 'Deactivate' : 'Activate'}
+                            className={`${Number((g as any).active) !== 0 ? 'text-amber-500 hover:text-amber-700' : 'text-emerald-500 hover:text-emerald-700'} p-1`}><Power size={15} /></button>}
                           {!canMod && !canDel && <span className="text-gray-300 text-xs italic">View only</span>}
                         </div>
                       </td>

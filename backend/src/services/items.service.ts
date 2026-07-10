@@ -80,6 +80,13 @@ export class ItemsService implements OnModuleInit {
         // Ensure nullable columns for opening entries (vch_id IS NULL = opening entry)
         await this.db.execute(`ALTER TABLE inventory_entries MODIFY COLUMN led_id INT NULL`).catch(() => {});
         await this.db.execute(`ALTER TABLE batch MODIFY COLUMN vch_id INT NULL`).catch(() => {});
+
+        // Active/Inactive flag — masters in use can't be deleted, so a soft
+        // "deactivate" retires them: they stay for history but drop out of the
+        // new-voucher pickers. Default 1 = every existing row stays active.
+        await this.db.execute(`ALTER TABLE items ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`).catch(() => {});
+        await this.db.execute(`ALTER TABLE item_groups ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`).catch(() => {});
+        await this.db.execute(`ALTER TABLE item_categories ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`).catch(() => {});
     }
 
     async getFlavours() {
@@ -91,11 +98,15 @@ export class ItemsService implements OnModuleInit {
     // ── Item Groups ──
     async getGroups(): Promise<any[]> {
         return this.db.query<any>(
-            `SELECT g.id, g.name, g.parent_id, p.name AS parent_name
+            `SELECT g.id, g.name, g.parent_id, g.active, p.name AS parent_name
              FROM item_groups g
              LEFT JOIN item_groups p ON p.id = g.parent_id
              ORDER BY g.name`
         );
+    }
+
+    async setGroupActive(id: number, active: boolean): Promise<void> {
+        await this.db.execute('UPDATE item_groups SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
     }
 
     async createGroup(name: string, parentId?: number | null): Promise<any> {
@@ -126,11 +137,15 @@ export class ItemsService implements OnModuleInit {
     // ── Item Categories ──
     async getCategories(): Promise<any[]> {
         return this.db.query<any>(
-            `SELECT c.id, c.name, c.parent_id, c.target_unit, p.name AS parent_name
+            `SELECT c.id, c.name, c.parent_id, c.target_unit, c.active, p.name AS parent_name
              FROM item_categories c
              LEFT JOIN item_categories p ON p.id = c.parent_id
              ORDER BY c.name`
         );
+    }
+
+    async setCategoryActive(id: number, active: boolean): Promise<void> {
+        await this.db.execute('UPDATE item_categories SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
     }
 
     async createCategory(name: string, parentId?: number | null, targetUnit?: string): Promise<any> {
@@ -235,6 +250,10 @@ export class ItemsService implements OnModuleInit {
         if (fields.length === 0) return;
         params.push(id);
         await this.db.execute(`UPDATE items SET ${fields.join(', ')} WHERE id = ?`, params);
+    }
+
+    async setActive(id: number, active: boolean): Promise<void> {
+        await this.db.execute('UPDATE items SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
     }
 
     async delete(id: number) {

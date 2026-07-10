@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, X, ChevronDown, Search, Lock, Settings } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, ChevronDown, Search, Lock, Settings, Power } from 'lucide-react';
 import { vchTypeApi, vouchersApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
@@ -269,6 +269,14 @@ const VchType: React.FC = () => {
     finally { setDeleting(false); }
   };
 
+  const toggleActive = async (t: any) => {
+    const next = !(Number(t.active) !== 0);
+    try {
+      const res = await vchTypeApi.setActive(t.id, next);
+      if (res.success) { showSuccess('Success', next ? 'Activated' : 'Deactivated'); fetchTypes(); }
+    } catch (e: any) { showError('Error', e.message || 'Failed'); }
+  };
+
   const parentOptions = types.filter(t =>
     (!editing || t.id !== editing.id) &&
     t.name.toLowerCase().includes(form.parent_search.toLowerCase())
@@ -358,6 +366,7 @@ const VchType: React.FC = () => {
                       <td className="py-2.5 px-3 font-medium text-gray-800 flex items-center gap-1.5">
                         {t.name}
                         {!!t.is_system && <Lock size={11} className="text-gray-300 flex-shrink-0" />}
+                        {Number((t as any).active) === 0 && <span className="text-[10px] font-bold uppercase bg-gray-200 text-gray-500 rounded px-1.5 py-0.5">Inactive</span>}
                       </td>
                       <td className="py-2.5 px-3 text-gray-500">{t.parent_name || t.name}</td>
                       <td className="py-2.5 px-3">
@@ -382,9 +391,10 @@ const VchType: React.FC = () => {
                           <div className="flex justify-center gap-2">
                             {canMod && <button onClick={() => openEdit(t)} title="Edit"
                               className="text-blue-500 hover:text-blue-700 p-1"><Pencil size={15} /></button>}
-                            {canDel && <button onClick={() => setDeleteTarget(t)} title="Delete"
-                              className="text-red-400 hover:text-red-600 p-1"><Trash2 size={15} /></button>}
-                            {!canMod && !canDel && <span className="text-gray-300 text-xs italic">View only</span>}
+                            {canMod && <button onClick={() => toggleActive(t)}
+                              title={Number((t as any).active) !== 0 ? 'Deactivate' : 'Activate'}
+                              className={`${Number((t as any).active) !== 0 ? 'text-amber-500 hover:text-amber-700' : 'text-emerald-500 hover:text-emerald-700'} p-1`}><Power size={15} /></button>}
+                            {!canMod && <span className="text-gray-300 text-xs italic">View only</span>}
                           </div>
                         )}
                       </td>

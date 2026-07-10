@@ -17,16 +17,22 @@ export class LedgerGroupService implements OnModuleInit {
                 INDEX idx_parent (parent_id)
             )
         `);
+        // Active/Inactive flag — deactivate retires a group without deleting.
+        await this.db.execute(`ALTER TABLE ledgergroup ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`).catch(() => {});
     }
 
     async findAll() {
         return this.db.query<any>(`
-            SELECT lg.id, lg.name, lg.parent_id,
+            SELECT lg.id, lg.name, lg.parent_id, lg.active,
                    p.name AS parent_name
             FROM ledgergroup lg
             LEFT JOIN ledgergroup p ON lg.parent_id = p.id
             ORDER BY lg.name ASC
         `);
+    }
+
+    async setActive(id: number, active: boolean) {
+        await this.db.execute('UPDATE ledgergroup SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
     }
 
     async create(data: { name: string; parent_id?: number | null }) {

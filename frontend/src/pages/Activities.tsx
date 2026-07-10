@@ -275,7 +275,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
             }
             return false;
           };
-          return all.filter((t: any) => t.id !== root.id && inFamily(t));
+          return all.filter((t: any) => t.id !== root.id && inFamily(t) && Number(t.active) !== 0);
         };
         setSalesVchTypes(familyOf('sales'));
         setCreditVchTypes(familyOf('credit note'));

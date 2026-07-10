@@ -37,6 +37,14 @@ export class LedgerGroupController {
         return { success: true, message: 'Ledger group updated' };
     }
 
+    @Put(':id/active')
+    @ApiOperation({ summary: 'Activate / deactivate a ledger group' })
+    @RequirePermission('ledger_groups', 'edit')
+    async setActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        await this.ledgerGroupService.setActive(parseInt(id, 10), !!body.active);
+        return { success: true, message: body.active ? 'Ledger group activated' : 'Ledger group deactivated' };
+    }
+
     @Delete(':id')
     @ApiOperation({ summary: 'Delete ledger group' })
     @RequirePermission('ledger_groups', 'delete')

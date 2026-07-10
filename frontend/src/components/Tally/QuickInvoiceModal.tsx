@@ -54,7 +54,8 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
                     vchTypeApi.getAll(),
                     customersApi.getById(String(data.customerId)),
                 ]);
-                const allItems = itemsRes.success ? (itemsRes.data || []) : [];
+                // Only active items are billable in the quick-invoice picker.
+                const allItems = (itemsRes.success ? (itemsRes.data || []) : []).filter((i: any) => Number(i.active) !== 0);
                 setItems(allItems);
 
                 // This report row already tells us which flavour the serial
@@ -84,7 +85,7 @@ const QuickInvoiceModal: React.FC<QuickInvoiceModalProps> = ({ isOpen, onClose, 
                     }
                     return false;
                 };
-                const children = allTypes.filter((t: any) => sales && t.id !== sales.id && inSalesFamily(t));
+                const children = allTypes.filter((t: any) => sales && t.id !== sales.id && inSalesFamily(t) && Number(t.active) !== 0);
                 setVchTypes(children);
                 const def = children.find((t: any) => t.name.toLowerCase() === 'tally billing')
                     ?? children.find((t: any) => t.name.toLowerCase() === 'tax invoice')

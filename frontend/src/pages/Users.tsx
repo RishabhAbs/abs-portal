@@ -27,7 +27,7 @@ const Users: React.FC = () => {
       const all: any[] = res.data || res || [];
       setAvailableVchTypes(all.filter((t: any) => t.is_system === 1 || t.is_system === true));
     }).catch(() => {});
-    ledgerGroupApi.getAll().then((res: any) => setAvailableLedgerGroups(res.data || res || [])).catch(() => {});
+    ledgerGroupApi.getAll().then((res: any) => setAvailableLedgerGroups(((res.data || res || []) as any[]).filter((g: any) => Number(g.active) !== 0))).catch(() => {});
   }, []);
   const [searchQuery, setSearchQuery] = useState('');
 

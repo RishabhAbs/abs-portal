@@ -42,6 +42,14 @@ export class ItemsController {
         return { success: true };
     }
 
+    @Put('groups/:id/active')
+    @ApiOperation({ summary: 'Activate / deactivate an item group' })
+    @RequireAnyPermission({ entity: 'items', action: 'edit' })
+    async setGroupActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        await this.itemsService.setGroupActive(parseInt(id), !!body.active);
+        return { success: true };
+    }
+
     @Delete('groups/:id')
     @ApiOperation({ summary: 'Delete item group' })
     @RequireAnyPermission({ entity: 'items', action: 'delete' })
@@ -69,6 +77,14 @@ export class ItemsController {
     @RequireAnyPermission({ entity: 'items', action: 'edit' })
     async updateCategory(@Param('id') id: string, @Body() body: { name: string; parent_id?: number | null; target_unit?: string }) {
         await this.itemsService.updateCategory(parseInt(id), body.name, body.parent_id, body.target_unit);
+        return { success: true };
+    }
+
+    @Put('categories/:id/active')
+    @ApiOperation({ summary: 'Activate / deactivate an item category' })
+    @RequireAnyPermission({ entity: 'items', action: 'edit' })
+    async setCategoryActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        await this.itemsService.setCategoryActive(parseInt(id), !!body.active);
         return { success: true };
     }
 
@@ -121,6 +137,14 @@ export class ItemsController {
     async update(@Param('id') id: string, @Body() body: any) {
         await this.itemsService.update(parseInt(id, 10), body);
         return { success: true, message: 'Item updated successfully' };
+    }
+
+    @Put(':id/active')
+    @ApiOperation({ summary: 'Activate / deactivate an item' })
+    @RequireAnyPermission({ entity: 'items', action: 'edit' })
+    async setActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        await this.itemsService.setActive(parseInt(id, 10), !!body.active);
+        return { success: true, message: body.active ? 'Item activated' : 'Item deactivated' };
     }
 
     @Delete(':id')

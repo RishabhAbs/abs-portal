@@ -41,6 +41,9 @@ export class VchTypeService implements OnModuleInit {
             await this.db.execute(`ALTER TABLE vchtype ADD COLUMN is_system TINYINT(1) NOT NULL DEFAULT 0`);
         }
 
+        // Active/Inactive flag — deactivate retires a custom type without deleting.
+        await this.db.execute(`ALTER TABLE vchtype ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`).catch(() => {});
+
         // Add numbering_mode + vch_width (legacy flat columns kept for migration path)
         const [numCol] = await this.db.query<any>(
             `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
@@ -127,7 +130,7 @@ export class VchTypeService implements OnModuleInit {
 
     async findAll() {
         const types = await this.db.query<any>(`
-            SELECT v.id, v.name, v.parent_id, v.deemed_positive, v.is_system,
+            SELECT v.id, v.name, v.parent_id, v.deemed_positive, v.is_system, v.active,
                    v.numbering_mode, v.vch_width,
                    p.name AS parent_name
             FROM vchtype v
@@ -280,6 +283,12 @@ export class VchTypeService implements OnModuleInit {
             changed_at: r.changed_at,
             snapshot: typeof r.snapshot === 'string' ? JSON.parse(r.snapshot) : r.snapshot,
         }));
+    }
+
+    async setActive(id: number, active: boolean) {
+        const existing = await this.db.queryOne<any>('SELECT is_system FROM vchtype WHERE id = ?', [id]);
+        if (existing?.is_system) throw new ForbiddenException('System voucher types cannot be deactivated');
+        await this.db.execute('UPDATE vchtype SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
     }
 
     async delete(id: number) {

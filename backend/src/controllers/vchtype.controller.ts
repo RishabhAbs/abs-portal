@@ -49,6 +49,14 @@ export class VchTypeController {
         return { success: true, data };
     }
 
+    @Put(':id/active')
+    @ApiOperation({ summary: 'Activate / deactivate a voucher type' })
+    @RequirePermission('vch_types', 'edit')
+    async setActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        await this.vchTypeService.setActive(parseInt(id, 10), !!body.active);
+        return { success: true, message: body.active ? 'Voucher type activated' : 'Voucher type deactivated' };
+    }
+
     @Delete(':id')
     @ApiOperation({ summary: 'Delete voucher type' })
     @RequirePermission('vch_types', 'delete')

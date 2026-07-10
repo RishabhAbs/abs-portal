@@ -940,6 +940,7 @@ export const ledgerGroupApi = {
   getAll: () => fetchApi<{ success: boolean; data: any[] }>('/ledger-groups'),
   create: (data: { name: string; parent_id?: number | null }) => fetchApi<{ success: boolean; data: any; message: string }>('/ledger-groups', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: { name?: string; parent_id?: number | null }) => fetchApi<{ success: boolean; message: string }>(`/ledger-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setActive: (id: number, active: boolean) => fetchApi<{ success: boolean; message: string }>(`/ledger-groups/${id}/active`, { method: 'PUT', body: JSON.stringify({ active }) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/ledger-groups/${id}`, { method: 'DELETE' }),
 };
 
@@ -948,6 +949,7 @@ export const vchTypeApi = {
   create: (data: any) => fetchApi<{ success: boolean; data: any; message: string }>('/vchtypes', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}`, { method: 'DELETE' }),
+  setActive: (id: number, active: boolean) => fetchApi<{ success: boolean; message: string }>(`/vchtypes/${id}/active`, { method: 'PUT', body: JSON.stringify({ active }) }),
   getAudit: (id: number) => fetchApi<{ success: boolean; data: any[] }>(`/vchtypes/${id}/audit`),
 };
 
@@ -965,16 +967,19 @@ export const itemsApi = {
   getFlavours: () => fetchApi<{ success: boolean; data: { id: number; name: string }[] }>('/items/flavours'),
   create: (data: any) => fetchApi<{ success: boolean; data: any; message: string }>('/items', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: any) => fetchApi<{ success: boolean; message: string }>(`/items/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setActive: (id: number, active: boolean) => fetchApi<{ success: boolean; message: string }>(`/items/${id}/active`, { method: 'PUT', body: JSON.stringify({ active }) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/items/${id}`, { method: 'DELETE' }),
   getCategories: () => fetchApi<{ success: boolean; data: any[] }>('/items/categories'),
   createCategory: (name: string, parent_id?: number | null, target_unit?: string) => fetchApi<{ success: boolean; data: any }>('/items/categories', { method: 'POST', body: JSON.stringify({ name, parent_id, target_unit }) }),
   updateCategory: (id: number, name: string, parent_id?: number | null, target_unit?: string) => fetchApi<{ success: boolean }>(`/items/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, parent_id, target_unit }) }),
+  setCategoryActive: (id: number, active: boolean) => fetchApi<{ success: boolean }>(`/items/categories/${id}/active`, { method: 'PUT', body: JSON.stringify({ active }) }),
   deleteCategory: (id: number) => fetchApi<{ success: boolean }>(`/items/categories/${id}`, { method: 'DELETE' }),
   getOpeningBatches: (id: number) => fetchApi<{ success: boolean; data: any[] }>(`/items/${id}/opening-batches`),
   saveOpeningBatches: (id: number, batches: any[]) => fetchApi<{ success: boolean }>(`/items/${id}/opening-batches`, { method: 'POST', body: JSON.stringify({ batches }) }),
   getGroups: () => fetchApi<{ success: boolean; data: any[] }>('/items/groups'),
   createGroup: (name: string, parent_id?: number | null) => fetchApi<{ success: boolean; data: any }>('/items/groups', { method: 'POST', body: JSON.stringify({ name, parent_id }) }),
   updateGroup: (id: number, name: string, parent_id?: number | null) => fetchApi<{ success: boolean }>(`/items/groups/${id}`, { method: 'PUT', body: JSON.stringify({ name, parent_id }) }),
+  setGroupActive: (id: number, active: boolean) => fetchApi<{ success: boolean }>(`/items/groups/${id}/active`, { method: 'PUT', body: JSON.stringify({ active }) }),
   deleteGroup: (id: number) => fetchApi<{ success: boolean }>(`/items/groups/${id}`, { method: 'DELETE' }),
 };
 

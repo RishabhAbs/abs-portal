@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, X, ChevronDown, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, ChevronDown, Search, Power } from 'lucide-react';
 import { itemsApi } from '../services/api';
 import { useToast } from '../components/Toast/Toast';
 import { useAuth } from '../context/AuthContext';
@@ -85,6 +85,8 @@ const Items: React.FC = () => {
   const fetchGroups = async () => {
     try {
       const res = await itemsApi.getGroups();
+      // Keep ALL groups (the group management view needs inactive ones too);
+      // the item-form group dropdown filters to active below.
       if (res.success) setGroups(res.data);
     } catch { }
   };
@@ -275,7 +277,20 @@ const Items: React.FC = () => {
     }
   };
 
-  const groupOptions = groups.filter(g => g.name.toLowerCase().includes(form.group_search.toLowerCase()));
+  // Deactivate/activate replaces hard delete — masters in use can't be
+  // deleted, so we retire them instead (they stay for history, drop out of
+  // voucher pickers).
+  const toggleActive = async (item: Item) => {
+    const next = !(Number((item as any).active) !== 0);
+    try {
+      const res = await itemsApi.setActive(item.id, next);
+      if (res.success) { showSuccess('Success', next ? 'Item activated' : 'Item deactivated'); fetchItems(); }
+    } catch (err: any) {
+      showError('Error', err.message || 'Failed to update item');
+    }
+  };
+
+  const groupOptions = groups.filter(g => Number((g as any).active) !== 0 && g.name.toLowerCase().includes(form.group_search.toLowerCase()));
 
   const filtered = items.filter(item => {
     const matchSearch = !search || item.item_name.toLowerCase().includes(search.toLowerCase());
@@ -337,7 +352,10 @@ const Items: React.FC = () => {
                 {filtered.map((item, idx) => (
                   <tr key={item.id} className="border-t border-gray-100 hover:bg-gray-50">
                     <td className="py-2.5 px-3 text-gray-500">{idx + 1}</td>
-                    <td className="py-2.5 px-3 font-medium text-gray-800">{item.item_name}</td>
+                    <td className="py-2.5 px-3 font-medium text-gray-800">
+                      {item.item_name}
+                      {Number((item as any).active) === 0 && <span className="ml-2 text-[10px] font-bold uppercase bg-gray-200 text-gray-500 rounded px-1.5 py-0.5">Inactive</span>}
+                    </td>
                     <td className="py-2.5 px-3 text-gray-600">{item.group_name || '-'}</td>
                     <td className="py-2.5 px-3 text-gray-600">{item.category_name || '-'}</td>
                     <td className="py-2.5 px-3 text-gray-600">{item.flavour_name || '-'}</td>
@@ -353,7 +371,9 @@ const Items: React.FC = () => {
                     <td className="py-2.5 px-3 text-center">
                       <div className="flex justify-center gap-2">
                         {canMod && <button onClick={() => openEdit(item)} className="text-blue-500 hover:text-blue-700 p-1" title="Edit"><Pencil size={16} /></button>}
-                        {canDel && <button onClick={() => setDeleteTarget(item)} className="text-red-400 hover:text-red-600 p-1" title="Delete"><Trash2 size={16} /></button>}
+                        {canEdit('items') && (Number((item as any).active) !== 0
+                          ? <button onClick={() => toggleActive(item)} className="text-amber-500 hover:text-amber-700 p-1" title="Deactivate"><Power size={16} /></button>
+                          : <button onClick={() => toggleActive(item)} className="text-emerald-500 hover:text-emerald-700 p-1" title="Activate"><Power size={16} /></button>)}
                         {!canMod && !canDel && <span className="text-gray-300 text-xs italic">View only</span>}
                       </div>
                     </td>
@@ -411,7 +431,7 @@ const Items: React.FC = () => {
                     onChange={e => setForm(f => ({ ...f, category_id: e.target.value ? Number(e.target.value) : null }))}
                     className="w-full border border-gray-300 rounded text-sm py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-blue-400">
                     <option value="">-- None --</option>
-                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {categories.filter(c => Number((c as any).active) !== 0 || c.id === form.category_id).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
               </div>

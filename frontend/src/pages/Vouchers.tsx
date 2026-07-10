@@ -662,7 +662,9 @@ const Vouchers: React.FC = () => {
     }
     return false;
   }, [allVchTypes]);
-  const childTypes    = allVchTypes.filter(t => isInFamily(t, selectedParentId));
+  // Deactivated custom types drop out of the picker; the current voucher's
+  // own type stays selectable even if it was later deactivated.
+  const childTypes    = allVchTypes.filter(t => isInFamily(t, selectedParentId) && (Number((t as any).active) !== 0 || t.name === voucherType));
 
   const [voucherType, setVoucherType] = useState('');
 
@@ -1623,7 +1625,7 @@ const Vouchers: React.FC = () => {
     // Ledger group options for the new party (default Sundry Debtors)
     if (ledgerGroups.length === 0) {
       ledgerGroupApi.getAll()
-        .then(res => { if (res.success) setLedgerGroups(res.data || []); })
+        .then(res => { if (res.success) setLedgerGroups((res.data || []).filter((g: any) => Number(g.active) !== 0)); })
         .catch(() => { /* dropdown just stays with the default */ });
     }
   }, [showNewCustomer]);
@@ -2580,9 +2582,9 @@ const Vouchers: React.FC = () => {
                           onBlur={() => setTimeout(() => setLines(p => p.map((l, i) => i !== idx ? l : { ...l, item_open: false })), 300)}
                           placeholder="Tap to search item..."
                           className="w-full text-sm font-semibold text-gray-800 placeholder-gray-400 bg-transparent border-none outline-none" />
-                        {line.item_open && products.filter((p: any) => !(line.item_search) || (p.item_name || '').toLowerCase().includes((line.item_search || '').toLowerCase())).length > 0 && (
+                        {line.item_open && products.filter((p: any) => Number(p.active) !== 0 && (!(line.item_search) || (p.item_name || '').toLowerCase().includes((line.item_search || '').toLowerCase()))).length > 0 && (
                           <div className="absolute z-20 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-44 overflow-y-auto">
-                            {products.filter((p: any) => !(line.item_search) || (p.item_name || '').toLowerCase().includes((line.item_search || '').toLowerCase())).slice(0, 20).map((p: any) => (
+                            {products.filter((p: any) => Number(p.active) !== 0 && (!(line.item_search) || (p.item_name || '').toLowerCase().includes((line.item_search || '').toLowerCase()))).slice(0, 20).map((p: any) => (
                               <div key={p.id} onPointerDown={() => {
                                 setLines(prev => prev.map((l, i) => i !== idx ? l : calcLine({
                                   ...l, product_id: String(p.id), item_name: p.item_name,
@@ -3510,8 +3512,11 @@ const Vouchers: React.FC = () => {
                         />
                         {line.item_open && (() => {
                           const q = (line.item_search ?? '').toLowerCase();
+                          // Only ACTIVE items are pickable; inactive ones stay
+                          // in `products` for name resolution on existing lines
+                          // but never appear as a new-item choice.
                           const matches = products
-                            .filter((p: any) => !q || (p.item_name || '').toLowerCase().includes(q))
+                            .filter((p: any) => Number(p.active) !== 0 && (!q || (p.item_name || '').toLowerCase().includes(q)))
                             .slice(0, 50);
                           return (
                             <div className="absolute z-30 left-0 right-0 top-full mt-0.5 bg-white border border-gray-200 rounded shadow-lg max-h-60 overflow-y-auto">
