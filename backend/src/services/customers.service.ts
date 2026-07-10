@@ -510,6 +510,10 @@ export class CustomersService implements OnModuleInit {
 
     const data = await this.db.query<any>(`
       SELECT c.*, ANY_VALUE(COALESCE(u.name, cu.name)) as group_name, ANY_VALUE(s.name) as state_name,
+      -- Whether the customer has any ACTIVE server mapping. The activity
+      -- renew picker badges rows Mapped/Unmapped from this — it used to be
+      -- missing entirely, so every customer displayed as "Unmapped".
+      EXISTS(SELECT 1 FROM cloud_mappings cmx WHERE cmx.customer_id = c.id AND cmx.status = 'Active') AS is_mapped,
       ANY_VALUE(ccd.contact_person) as person,
       ANY_VALUE(COALESCE(ccd.mobile_no, c.mobile)) as mobile,
       ANY_VALUE(COALESCE(cv.user_name, lvu.name, lva.name)) as lastvisitperson_name,

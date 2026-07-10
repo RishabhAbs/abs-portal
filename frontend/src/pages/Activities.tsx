@@ -353,7 +353,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
 
   // Search customers when user types 3+ characters
   useEffect(() => {
-    if (customerSearch.length < 4) {
+    if (customerSearch.length < 3) {
       setLocalCustomers([]);
       return;
     }
@@ -363,11 +363,20 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
         // Fix: Deduplicate by ID to prevent dropdown duplicates
         const uniqueCustomers = res.data ? Array.from(new Map(res.data.map((c: any) => [c.id, c])).values()) : [];
         setLocalCustomers(uniqueCustomers);
-      } catch (err) {
+      } catch (err: any) {
+        // A silently-swallowed failure here reads as "No customers found",
+        // which sends the user hunting a data problem when it's usually an
+        // expired session. Say what actually happened.
+        const msg = String(err?.message || '');
+        if (/unauthoriz|expired|401/i.test(msg)) {
+          showError('Session expired', 'Your login has expired — please log out and log in again.');
+        } else {
+          showError('Search failed', msg || 'Could not search customers');
+        }
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [customerSearch]);
+  }, [customerSearch, showError]);
 
   // Search servers when user types 3+ characters
   useEffect(() => {
@@ -1284,8 +1293,12 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
   };
 
 
-  const handleCustomerChange = async (customerName: string) => {
-    const customer = localCustomers.find((c: any) => c.company === customerName);
+  // Accepts the picked customer OBJECT when available — resolving by name
+  // alone breaks for duplicate company names (two customers, same name,
+  // only one mapped): the lookup could land on the unmapped twin and the
+  // renewal died with "not mapped to any server".
+  const handleCustomerChange = async (customerName: string, picked?: any) => {
+    const customer = picked ?? localCustomers.find((c: any) => c.company === customerName);
     if (customer) {
       // 1. Fetch Mapping
       let mapping: any = null;
@@ -2305,7 +2318,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                                         setForm({ ...form, customer_name: customer.company, customer_domain_ip: customer.id });
                                         setCustomerSearch(customer.company);
                                         setShowCustomerDropdown(false);
-                                        handleCustomerChange(customer.company);
+                                        handleCustomerChange(customer.company, customer);
                                       }}
                                     >
                                       <div className="flex items-center justify-between">
@@ -2580,7 +2593,7 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                             <div className="px-3 py-2 text-gray-500 text-sm">Type at least 3 characters...</div>
                           ) : localCustomers.length > 0 ? (
                             localCustomers.slice(0, 5).map((c: any) => (
-                              <button key={c.id} type="button" onClick={() => { setCustomerSearch(c.company); setShowCustomerDropdown(false); handleCustomerChange(c.company); }} className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b last:border-b-0 text-sm">{c.company}</button>
+                              <button key={c.id} type="button" onClick={() => { setCustomerSearch(c.company); setShowCustomerDropdown(false); handleCustomerChange(c.company, c); }} className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b last:border-b-0 text-sm">{c.company}</button>
                             ))
                           ) : (
                             <div className="px-3 py-2 text-gray-500 text-sm">No customers found</div>
