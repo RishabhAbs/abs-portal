@@ -2600,7 +2600,39 @@ export class ActivitiesService {
 
       const lastActivity = await this.db.queryOne<Activity>(activityQuery, activityParams);
 
-      console.log('[getRenewalDefaults] customer:', identifier, 'serverName:', serverName || 'ALL', 'lastActivity:', lastActivity ? {
+      // TOTAL users on the running plan = base plan units + every mid-cycle
+      // User addition that expires WITH the plan. Mid-cycle "User" activities
+      // are saved with new_expiry_date = the plan's expiry, so summing
+      // billing_units across all Sales activities sharing the current plan's
+      // expiry gives the real active count (e.g. 12 base + 3 added = 15).
+      // Renewing must carry ALL of them forward, not just the last row's
+      // count — which is why a renewal used to show only the 3 added users.
+      let planTotalUnits: number | null = null;
+      const planExpiry = lastActivity?.new_expiry_date;
+      if (planExpiry) {
+        let unitsQuery = `
+          SELECT COALESCE(SUM(billing_units), 0) AS total_units
+          FROM cloud_activities
+          WHERE (customer_id = ? OR customer_domain_ip = ?)
+            AND (record_nature = 'Sales' OR record_nature IS NULL)
+            AND new_expiry_date = ?
+        `;
+        const unitsParams: any[] = [identifier, identifier, planExpiry];
+        if (serverName) {
+          const sIp = mapping?.server_ip || '';
+          const cIp = mapping?.customer_ip || '';
+          const uniq = [...new Set([serverName, sIp, cIp].filter(v => v && v.length > 0))];
+          if (uniq.length > 0) {
+            unitsQuery += ` AND server_name IN (${uniq.map(() => '?').join(',')})`;
+            unitsParams.push(...uniq);
+          }
+        }
+        const sumRow = await this.db.queryOne<{ total_units: number }>(unitsQuery, unitsParams);
+        const t = Number(sumRow?.total_units || 0);
+        if (t > 0) planTotalUnits = t;
+      }
+
+      console.log('[getRenewalDefaults] customer:', identifier, 'serverName:', serverName || 'ALL', 'planTotalUnits:', planTotalUnits, 'lastActivity:', lastActivity ? {
         id: lastActivity.id, rate: lastActivity.last_bill_rate, units: lastActivity.billing_units,
         cycle: lastActivity.billing_cycle, mode: lastActivity.billing_mode, expiry: lastActivity.new_expiry_date,
         server_name: lastActivity.server_name
@@ -2622,7 +2654,10 @@ export class ActivitiesService {
         current_plan_start: lastActivity?.start_from || lastActivity?.activity_date,
         current_plan_expiry: lastActivity?.new_expiry_date,
         server_expiry: mapping?.server_id ? (await this.db.queryOne<{ server_expiry: string }>(`SELECT server_expiry FROM cloud_servers WHERE id = ?`, [mapping.server_id]))?.server_expiry : null,
-        units: lastActivity?.billing_units || (mapping as any)?.billed_users || 0
+        // Renewal default = full active user count on the running plan
+        // (base + mid-cycle additions), falling back to the last activity /
+        // mapping only if the plan-sum couldn't be computed.
+        units: planTotalUnits ?? lastActivity?.billing_units ?? (mapping as any)?.billed_users ?? 0
       };
     }
   }
