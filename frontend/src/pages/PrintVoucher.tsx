@@ -354,7 +354,7 @@ export default function PrintVoucher() {
   const lineItems = useMemo(() => {
     if (!voucher?.ledgerEntries) return [];
     const items: Array<{
-      description: string; sac: string; gst_rate: number;
+      description: string; batch: string; sac: string; gst_rate: number;
       qty: number; rate: number; amount: number;
       cgst: number; sgst: number; igst: number;
     }> = [];
@@ -371,8 +371,15 @@ export default function PrintVoucher() {
         const cgst = isIgst ? 0 : +(taxBase * (gstRate / 2) / 100).toFixed(2);
         const sgst = isIgst ? 0 : +(taxBase * (gstRate / 2) / 100).toFixed(2);
         const igst = isIgst ? +(taxBase * gstRate / 100).toFixed(2) : 0;
+        // Batch names (Tally shows these as a sub-line under the item name,
+        // e.g. "Item1" / "Batch : 1222222"). Join multiple batches on one
+        // item with a comma so the row still fits a single description cell.
+        const batchNames = (ie.batchRows || [])
+          .map((b: any) => (b.batch_name || '').trim())
+          .filter(Boolean);
         items.push({
           description: ie.item_name || '—',
+          batch:       batchNames.join(', '),
           sac:         ie.hsn || '',
           gst_rate:    gstRate,
           qty:         Math.abs(qty),
@@ -1233,7 +1240,12 @@ function InvoicePreview({
             ) : items.map((it, i) => (
               <tr key={i}>
                 <td className="border border-slate-200 px-2 py-1.5 text-center tabular-nums">{i + 1}</td>
-                <td className="border border-slate-200 px-2 py-1.5">{it.description}</td>
+                <td className="border border-slate-200 px-2 py-1.5">
+                  <div>{it.description}</div>
+                  {it.batch && (
+                    <div className="text-[10px] italic text-slate-500 mt-0.5">Batch : {it.batch}</div>
+                  )}
+                </td>
                 <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{it.sac || '—'}</td>
                 <td className="border border-slate-200 px-2 py-1.5 tabular-nums">{it.gst_rate}%</td>
                 <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums">{it.qty}</td>
