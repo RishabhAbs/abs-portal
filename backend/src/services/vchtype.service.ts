@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, ForbiddenException } from '@nestjs/common';
+import { Injectable, OnModuleInit, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 
 const SEED_DATA = [
@@ -285,6 +285,20 @@ export class VchTypeService implements OnModuleInit {
     async delete(id: number) {
         const existing = await this.db.queryOne<any>('SELECT is_system FROM vchtype WHERE id = ?', [id]);
         if (existing?.is_system) throw new ForbiddenException('System voucher types cannot be deleted');
+        // Block deletion when vouchers were entered under this type, or it has
+        // child sub-types — either would orphan real records.
+        const vouchers = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM vch_details WHERE vch_type_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        const kids = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM vchtype WHERE parent_id = ? AND id <> ?`, [id, id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((vouchers?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: ${vouchers!.cnt} voucher(s) were created under this type.`);
+        }
+        if ((kids?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: this type has ${kids!.cnt} sub-type(s). Remove them first.`);
+        }
         await this.db.execute('DELETE FROM vchtype_numbering_period WHERE vchtype_id = ?', [id]);
         await this.db.execute('DELETE FROM vchtype_prefix_period WHERE vchtype_id = ?', [id]);
         await this.db.execute('DELETE FROM vchtype_suffix_period WHERE vchtype_id = ?', [id]);

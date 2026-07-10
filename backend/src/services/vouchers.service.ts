@@ -220,6 +220,23 @@ export class VouchersService implements OnModuleInit {
         await this.db.execute(`ALTER TABLE inventory_entries ADD COLUMN gst_rate DECIMAL(5,2) DEFAULT 0`).catch(() => {});
         // Migration: add side column for Stock Journal (source/destination)
         await this.db.execute(`ALTER TABLE inventory_entries ADD COLUMN side ENUM('source','destination') DEFAULT NULL`).catch(() => {});
+        // Migration: snapshot the item NAME onto each inventory line. Vouchers
+        // are historical documents — deleting or renaming an item must not blank
+        // the item on already-saved vouchers. We store the name at save time and
+        // fall back to it on load when the live item row is gone.
+        const [invNameCol] = await this.db.query<any>(
+            `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'inventory_entries' AND COLUMN_NAME = 'item_name'`
+        ).catch(() => [{ cnt: 1 }]);
+        if ((invNameCol?.cnt ?? 0) === 0) {
+            await this.db.execute(`ALTER TABLE inventory_entries ADD COLUMN item_name VARCHAR(255) DEFAULT NULL`).catch(() => {});
+            // Backfill from the live items table — captures every currently-valid
+            // name so a LATER item deletion/rename can never blank those lines.
+            await this.db.execute(
+                `UPDATE inventory_entries ie JOIN items i ON ie.item_id = i.id
+                 SET ie.item_name = i.item_name WHERE ie.item_name IS NULL`
+            ).catch(() => {});
+        }
 
         await this.db.execute(`
             CREATE TABLE IF NOT EXISTS batch (
@@ -544,8 +561,9 @@ export class VouchersService implements OnModuleInit {
                     const qty = -(Math.abs(Number(item.qty)));
                     const amt = -(Math.abs(Number(item.amount)));
                     const invRes = await this.db.execute(
-                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'source')`,
-                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side, item_name)
+                         VALUES (?, ?, ?, ?, ?, ?, 'source', (SELECT item_name FROM items WHERE id = ?))`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0, item.item_id], conn,
                     );
                     if (item.batch_rows?.length) {
                         for (const b of item.batch_rows) {
@@ -562,8 +580,9 @@ export class VouchersService implements OnModuleInit {
                     const qty = Math.abs(Number(item.qty));
                     const amt = Math.abs(Number(item.amount));
                     const invRes = await this.db.execute(
-                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'destination')`,
-                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side, item_name)
+                         VALUES (?, ?, ?, ?, ?, ?, 'destination', (SELECT item_name FROM items WHERE id = ?))`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0, item.item_id], conn,
                     );
                     if (item.batch_rows?.length) {
                         for (const b of item.batch_rows) {
@@ -718,8 +737,9 @@ export class VouchersService implements OnModuleInit {
                 const sign = effectivePositive === true ? -1 : 1;
                 for (const item of data.items) {
                     const invResult = await this.db.execute(
-                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate) VALUES (?, ?, ?, ?, ?, ?)`,
-                        [goodsLedId, item.item_id, item.qty * sign, item.rate, item.amount * sign, item.gst_rate || 0],
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, item_name)
+                         VALUES (?, ?, ?, ?, ?, ?, (SELECT item_name FROM items WHERE id = ?))`,
+                        [goodsLedId, item.item_id, item.qty * sign, item.rate, item.amount * sign, item.gst_rate || 0, item.item_id],
                         conn,
                     );
                     const invId = invResult.insertId;
@@ -2850,7 +2870,10 @@ export class VouchersService implements OnModuleInit {
             le.inventoryEntries = await this.db.query<any>(
                 `SELECT ie.id, ie.led_id, ie.item_id, ie.qty, ie.rate, ie.amount,
                         ie.created_at, ie.side,
-                        i.item_name,
+                        -- Prefer the live item name; fall back to the snapshot
+                        -- saved on the line so a deleted/renamed item never
+                        -- blanks a historical voucher.
+                        COALESCE(i.item_name, ie.item_name) AS item_name,
                         i.hsn,
                         COALESCE(i.gst, ie.gst_rate, 0) AS gst_rate
                  FROM inventory_entries ie
@@ -3265,8 +3288,9 @@ export class VouchersService implements OnModuleInit {
                     const qty = -(Math.abs(Number(item.qty)));
                     const amt = -(Math.abs(Number(item.amount)));
                     const invRes = await this.db.execute(
-                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'source')`,
-                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side, item_name)
+                         VALUES (?, ?, ?, ?, ?, ?, 'source', (SELECT item_name FROM items WHERE id = ?))`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0, item.item_id], conn,
                     );
                     if (item.batch_rows?.length) {
                         for (const b of item.batch_rows) {
@@ -3283,8 +3307,9 @@ export class VouchersService implements OnModuleInit {
                     const qty = Math.abs(Number(item.qty));
                     const amt = Math.abs(Number(item.amount));
                     const invRes = await this.db.execute(
-                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side) VALUES (?, ?, ?, ?, ?, ?, 'destination')`,
-                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0], conn,
+                        `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, side, item_name)
+                         VALUES (?, ?, ?, ?, ?, ?, 'destination', (SELECT item_name FROM items WHERE id = ?))`,
+                        [dummyLedId, item.item_id, qty, item.rate, amt, item.gst_rate || 0, item.item_id], conn,
                     );
                     if (item.batch_rows?.length) {
                         for (const b of item.batch_rows) {
@@ -3430,8 +3455,9 @@ export class VouchersService implements OnModuleInit {
             const sign = effectivePositive ? -1 : 1;
             for (const item of data.items) {
                 const invResult = await this.db.execute(
-                    `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate) VALUES (?, ?, ?, ?, ?, ?)`,
-                    [goodsLedId, item.item_id, item.qty * sign, item.rate, item.amount * sign, item.gst_rate || 0], conn,
+                    `INSERT INTO inventory_entries (led_id, item_id, qty, rate, amount, gst_rate, item_name)
+                     VALUES (?, ?, ?, ?, ?, ?, (SELECT item_name FROM items WHERE id = ?))`,
+                    [goodsLedId, item.item_id, item.qty * sign, item.rate, item.amount * sign, item.gst_rate || 0, item.item_id], conn,
                 );
                 const invId = invResult.insertId;
                 if (item.batch_rows && item.batch_rows.length > 0) {

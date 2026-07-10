@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 
 @Injectable()
@@ -114,6 +114,12 @@ export class ItemsService implements OnModuleInit {
     }
 
     async deleteGroup(id: number): Promise<void> {
+        const used = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM items WHERE item_group_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((used?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: ${used!.cnt} item(s) belong to this group. Move them to another group first.`);
+        }
         await this.db.execute('DELETE FROM item_groups WHERE id=?', [id]);
     }
 
@@ -145,6 +151,18 @@ export class ItemsService implements OnModuleInit {
     }
 
     async deleteCategory(id: number): Promise<void> {
+        const used = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM items WHERE category_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        const kids = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM item_categories WHERE parent_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((used?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: ${used!.cnt} item(s) use this category. Move them first.`);
+        }
+        if ((kids?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: this category has ${kids!.cnt} sub-categor(ies). Remove them first.`);
+        }
         await this.db.execute('DELETE FROM item_categories WHERE id=?', [id]);
     }
 
@@ -220,6 +238,17 @@ export class ItemsService implements OnModuleInit {
     }
 
     async delete(id: number) {
+        // Never hard-delete an item that's used on a voucher — that orphans
+        // the inventory line and blanks the item name on historical vouchers
+        // (exactly the "item name missing" bug). Block it instead.
+        const used = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM inventory_entries WHERE item_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((used?.cnt ?? 0) > 0) {
+            throw new BadRequestException(
+                `This item is used on ${used!.cnt} voucher line(s) and cannot be deleted — deleting it would blank the item on those vouchers. Rename or deactivate it instead.`,
+            );
+        }
         await this.db.execute('DELETE FROM items WHERE id = ?', [id]);
     }
 

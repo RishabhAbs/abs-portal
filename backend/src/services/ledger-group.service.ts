@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 
 @Injectable()
@@ -48,6 +48,24 @@ export class LedgerGroupService implements OnModuleInit {
     }
 
     async delete(id: number) {
+        const ledgers = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM customer WHERE ledgergroup = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        const kids = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM ledgergroup WHERE parent_id = ? AND id <> ?`, [id, id],
+        ).catch(() => ({ cnt: 0 }));
+        const users = await this.db.queryOne<{ cnt: number }>(
+            `SELECT COUNT(*) AS cnt FROM cloud_users WHERE ledger_group_id = ?`, [id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((ledgers?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: ${ledgers!.cnt} ledger(s) are filed under this group. Move them first.`);
+        }
+        if ((kids?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: this group has ${kids!.cnt} sub-group(s). Remove them first.`);
+        }
+        if ((users?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: ${users!.cnt} user(s) are scoped to this ledger group. Reassign them first.`);
+        }
         await this.db.execute('DELETE FROM ledgergroup WHERE id = ?', [id]);
     }
 }

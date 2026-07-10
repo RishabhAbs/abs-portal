@@ -939,6 +939,34 @@ export class CustomersService implements OnModuleInit {
 
   async delete(id: number): Promise<void> {
     await this.findById(id);
+    // A customer with ANY record in the system must not be hard-deleted —
+    // vouchers, ledger entries, bill allocations, cloud server mappings,
+    // billing activities or Tally serials would all be orphaned. Deactivate
+    // (active_status = 'Inactive') instead of deleting.
+    const refs = await this.db.queryOne<any>(
+      `SELECT
+         (SELECT COUNT(*) FROM vch_details      WHERE party_ledger_id = ?) AS vouchers,
+         (SELECT COUNT(*) FROM ledger_entries   WHERE ledger_id = ?)       AS ledger_entries,
+         (SELECT COUNT(*) FROM bill_allocation  WHERE ledger = ?)          AS bill_allocs,
+         (SELECT COUNT(*) FROM cloud_mappings   WHERE customer_id = ?)     AS mappings,
+         (SELECT COUNT(*) FROM cloud_activities WHERE customer_id = ?)     AS activities,
+         (SELECT COUNT(*) FROM tallydetails     WHERE customerid = ?)      AS tally`,
+      [id, id, id, id, id, id],
+    ).catch(() => null);
+    const total =
+      Number(refs?.vouchers || 0) + Number(refs?.ledger_entries || 0) + Number(refs?.bill_allocs || 0) +
+      Number(refs?.mappings || 0) + Number(refs?.activities || 0) + Number(refs?.tally || 0);
+    if (total > 0) {
+      const parts: string[] = [];
+      if (Number(refs?.vouchers))       parts.push(`${refs.vouchers} voucher(s)`);
+      if (Number(refs?.mappings))       parts.push(`${refs.mappings} cloud mapping(s)`);
+      if (Number(refs?.activities))     parts.push(`${refs.activities} billing activit(ies)`);
+      if (Number(refs?.tally))          parts.push(`${refs.tally} Tally serial(s)`);
+      const detail = parts.length ? ` (${parts.join(', ')})` : '';
+      throw new BadRequestException(
+        `Cannot delete: this customer has records in the system${detail}. Deactivate it instead of deleting.`,
+      );
+    }
     await this.db.execute(`DELETE FROM customer WHERE id = ?`, [id]);
   }
 

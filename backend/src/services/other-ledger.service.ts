@@ -130,6 +130,20 @@ export class OtherLedgerService implements OnModuleInit {
     }
 
     async delete(id: number) {
+        // Block deletion when the ledger is used anywhere in the books —
+        // as a voucher party, a ledger entry, or a bill allocation. Deleting
+        // a ledger with transactions would corrupt those vouchers.
+        const refs = await this.db.queryOne<{ cnt: number }>(
+            `SELECT (
+                (SELECT COUNT(*) FROM ledger_entries WHERE ledger_id = ?) +
+                (SELECT COUNT(*) FROM vch_details    WHERE party_ledger_id = ?) +
+                (SELECT COUNT(*) FROM bill_allocation WHERE ledger = ?)
+             ) AS cnt`,
+            [id, id, id],
+        ).catch(() => ({ cnt: 0 }));
+        if ((refs?.cnt ?? 0) > 0) {
+            throw new BadRequestException(`Cannot delete: this ledger is used in ${refs!.cnt} voucher entr(ies). Deactivate it instead.`);
+        }
         // Only allow deleting non-Sundry-Debtor records
         await this.db.execute(
             `DELETE FROM customer WHERE id = ? AND ledgergroup != ${SUNDRY_DEBTORS_ID}`,
