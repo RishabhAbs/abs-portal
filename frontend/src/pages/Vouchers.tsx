@@ -766,8 +766,11 @@ const Vouchers: React.FC = () => {
       }
     }).catch(() => {});
     itemsApi.getAll().then(r => { if (r.success) setProducts(r.data); }).catch(() => {});
-    // Load all ledger accounts from other-ledgers (non-sundry debtors: CGST, SGST, IGST, etc.)
-    otherLedgerApi.getAll().then((r: any) => {
+    // Load the FULL chart of accounts for voucher entry (CGST/SGST/IGST/
+    // Sales/Round Off…). scope='all' bypasses the per-user ledger-group
+    // filter — otherwise a scoped user gets no tax ledgers and GST posting
+    // silently breaks.
+    otherLedgerApi.getAll('all').then((r: any) => {
       const data: any[] = r.success ? r.data : (Array.isArray(r) ? r : []);
       setAllLedgers(data);
       // Pre-find tax ledger IDs by name

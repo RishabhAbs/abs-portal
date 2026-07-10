@@ -1,9 +1,9 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OtherLedgerService } from '../services/other-ledger.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { PermissionsGuard } from '../guards/permissions.guard';
-import { RequirePermission } from '../decorators/permissions.decorator';
+import { RequirePermission, RequireAnyPermission } from '../decorators/permissions.decorator';
 
 @ApiTags('Other Ledgers')
 @Controller('api/other-ledgers')
@@ -13,10 +13,21 @@ export class OtherLedgerController {
     constructor(private otherLedgerService: OtherLedgerService) {}
 
     @Get()
-    @ApiOperation({ summary: 'Get all other ledgers (scoped to the user\'s ledger group when one is assigned)' })
-    @RequirePermission('other_ledgers', 'view')
-    async findAll(@Req() req: any) {
-        const data = await this.otherLedgerService.findAll(req.user);
+    @ApiOperation({ summary: 'Get all other ledgers (scoped to the user\'s ledger group unless scope=all)' })
+    // Voucher / activity entry also needs the chart of accounts, so anyone
+    // who can view/create those may list ledgers — not just other_ledgers.view.
+    @RequireAnyPermission(
+        { entity: 'other_ledgers', action: 'view' },
+        { entity: 'vouchers', action: 'view' },
+        { entity: 'vouchers', action: 'create' },
+        { entity: 'activities', action: 'view' },
+        { entity: 'activities', action: 'create' },
+    )
+    async findAll(@Req() req: any, @Query('scope') scope?: string) {
+        // scope=all → full chart of accounts, unscoped. The voucher entry
+        // screen needs every system ledger (CGST/SGST/IGST/Sales/Round Off…)
+        // to post taxes correctly, regardless of the user's party-group scope.
+        const data = await this.otherLedgerService.findAll(req.user, { unscoped: scope === 'all' });
         return { success: true, data };
     }
 

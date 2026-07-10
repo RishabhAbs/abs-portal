@@ -952,7 +952,9 @@ export const vchTypeApi = {
 };
 
 export const otherLedgerApi = {
-  getAll: () => fetchApi<{ success: boolean; data: any[] }>('/other-ledgers'),
+  // scope='all' returns the full chart of accounts unscoped (voucher entry);
+  // default is scoped to the user's ledger group (Ledgers management screen).
+  getAll: (scope?: 'all') => fetchApi<{ success: boolean; data: any[] }>(`/other-ledgers${scope === 'all' ? '?scope=all' : ''}`),
   create: (data: { company: string; ledgergroup: number; opening_balance?: number; opening_balance_type?: string; billbybill?: string }) => fetchApi<{ success: boolean; data: any; message: string }>('/other-ledgers', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: { company?: string; ledgergroup?: number; opening_balance?: number; opening_balance_type?: string; billbybill?: string }) => fetchApi<{ success: boolean; message: string }>(`/other-ledgers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => fetchApi<{ success: boolean; message: string }>(`/other-ledgers/${id}`, { method: 'DELETE' }),

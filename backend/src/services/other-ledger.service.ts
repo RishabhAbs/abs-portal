@@ -39,7 +39,7 @@ export class OtherLedgerService implements OnModuleInit {
         }
     }
 
-    async findAll(user?: { id?: string; role?: string }) {
+    async findAll(user?: { id?: string; role?: string }, opts?: { unscoped?: boolean }) {
         // Returns every ledger (including Sundry Debtors / parties) so the
         // Other Ledger screen can edit opening balance + group on any of them.
         // Non-admin users with a ledger_group_id assigned only see ledgers
@@ -48,9 +48,12 @@ export class OtherLedgerService implements OnModuleInit {
         //   NULL ledger_group_id → not assigned → NO ledgers at all
         //   0                    → "All Ledgers" sentinel → unrestricted
         //   >0                   → that group and its child groups only
+        // opts.unscoped bypasses scoping entirely — voucher entry needs the
+        // full chart of accounts (CGST/SGST/IGST/Sales/Round Off) to post
+        // taxes, so it must never be filtered by a user's party-group scope.
         let scopeSql = '';
         const params: any[] = [];
-        if (user?.id && (user.role || '').toLowerCase() !== 'admin') {
+        if (!opts?.unscoped && user?.id && (user.role || '').toLowerCase() !== 'admin') {
             const row = await this.db.queryOne<any>(
                 `SELECT ledger_group_id FROM cloud_users WHERE id = ?`, [user.id],
             ).catch(() => null);
