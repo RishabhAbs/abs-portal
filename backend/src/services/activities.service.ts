@@ -2632,10 +2632,43 @@ export class ActivitiesService {
         if (t > 0) planTotalUnits = t;
       }
 
-      console.log('[getRenewalDefaults] customer:', identifier, 'serverName:', serverName || 'ALL', 'planTotalUnits:', planTotalUnits, 'lastActivity:', lastActivity ? {
-        id: lastActivity.id, rate: lastActivity.last_bill_rate, units: lastActivity.billing_units,
-        cycle: lastActivity.billing_cycle, mode: lastActivity.billing_mode, expiry: lastActivity.new_expiry_date,
-        server_name: lastActivity.server_name
+      // BASE plan activity for the running plan = the most recent New/Renewal
+      // that established it (activity_type != 'User'), sharing the current
+      // plan's expiry. Its cycle/mode/rate are the plan's real cadence — a
+      // mid-cycle "User" top-up is billed M2M/Monthly pro-rata, so reading
+      // cycle/mode off the last activity made a Quarterly/D2D plan renew as
+      // Monthly/M2M. The base activity is the authoritative source.
+      let basePlan: Activity | null = null;
+      if (planExpiry) {
+        let baseQuery = `
+          SELECT * FROM cloud_activities
+          WHERE (customer_id = ? OR customer_domain_ip = ?)
+            AND (record_nature = 'Sales' OR record_nature IS NULL)
+            AND new_expiry_date = ?
+            AND (activity_type IS NULL OR activity_type != 'User')
+        `;
+        const baseParams: any[] = [identifier, identifier, planExpiry];
+        if (serverName) {
+          const sIp = mapping?.server_ip || '';
+          const cIp = mapping?.customer_ip || '';
+          const uniq = [...new Set([serverName, sIp, cIp].filter(v => v && v.length > 0))];
+          if (uniq.length > 0) {
+            baseQuery += ` AND server_name IN (${uniq.map(() => '?').join(',')})`;
+            baseParams.push(...uniq);
+          }
+        }
+        baseQuery += ` ORDER BY activity_date DESC, created_at DESC LIMIT 1`;
+        basePlan = await this.db.queryOne<Activity>(baseQuery, baseParams);
+      }
+      // Everything that describes the recurring plan comes from the base
+      // activity when we found one; the last (possibly User) activity is only
+      // the fallback.
+      const planSource = basePlan || lastActivity;
+
+      console.log('[getRenewalDefaults] customer:', identifier, 'serverName:', serverName || 'ALL', 'planTotalUnits:', planTotalUnits, 'planSource:', planSource ? {
+        id: planSource.id, type: planSource.activity_type, rate: planSource.last_bill_rate, units: planSource.billing_units,
+        cycle: planSource.billing_cycle, mode: planSource.billing_mode, expiry: planSource.new_expiry_date,
+        server_name: planSource.server_name
       } : 'NULL', 'mapping:', mapping ? { billing_cycle: mapping.billing_cycle, billing_mode: mapping.billing_mode, billed_users: mapping.billed_users } : 'NULL');
 
       return {
@@ -2643,15 +2676,17 @@ export class ActivitiesService {
         customer_id: identifier,
         server_ip: mapping?.server_ip || '',
         customer_domain_ip: mapping?.customer_ip || '',
-        // Priority: lastActivity > mapping > server > default
-        rate: lastActivity?.last_bill_rate || mapping?.billing_rate || 0,
-        cycle: lastActivity?.billing_cycle || mapping?.billing_cycle || mapping?.server_default_cycle || 'Yearly',
-        mode: lastActivity?.billing_mode || mapping?.billing_mode || mapping?.server_default_mode || 'day_to_day',
+        // Cadence (rate / cycle / mode) follows the BASE plan, not a mid-cycle
+        // User top-up. Priority: basePlan > mapping > server > default.
+        rate: planSource?.last_bill_rate || mapping?.billing_rate || 0,
+        cycle: planSource?.billing_cycle || mapping?.billing_cycle || mapping?.server_default_cycle || 'Yearly',
+        mode: planSource?.billing_mode || mapping?.billing_mode || mapping?.server_default_mode || 'day_to_day',
         // Start Date = Expiry (User Request)
         start_date: lastActivity?.new_expiry_date ? formatDateForMySQL(lastActivity.new_expiry_date) : getISTDateString(),
         last_expiry: lastActivity?.new_expiry_date,
-        // New fields for User Activity Automation
-        current_plan_start: lastActivity?.start_from || lastActivity?.activity_date,
+        // Plan window for the User-vs-New auto-detection. Start comes from the
+        // base activity (the true plan start), expiry is shared.
+        current_plan_start: planSource?.start_from || planSource?.activity_date || lastActivity?.start_from || lastActivity?.activity_date,
         current_plan_expiry: lastActivity?.new_expiry_date,
         server_expiry: mapping?.server_id ? (await this.db.queryOne<{ server_expiry: string }>(`SELECT server_expiry FROM cloud_servers WHERE id = ?`, [mapping.server_id]))?.server_expiry : null,
         // Renewal default = full active user count on the running plan

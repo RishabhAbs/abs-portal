@@ -437,6 +437,13 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
   const canEditActivity = canEdit('activities');
   const canDel = canDelete('activities');
 
+  // On a RENEW, a non-admin may only adjust Rate / Cycle / Mode — everything
+  // else (units, dates, bill type, voucher type, SOF) is auto-computed from
+  // the running plan and locked, so they can't accidentally break the math.
+  // Admins keep full control. Class helper greys out the locked inputs.
+  const renewLocked = !!renewMode && !isAdmin();
+  const lockCls = renewLocked ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : '';
+
   // Helper to check if a customer is mapped (async API call)
   const [customerMappingStatus, setCustomerMappingStatus] = useState<Map<string, boolean>>(new Map());
 
@@ -2384,15 +2391,17 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                         <DateInput
                           value={form.activity_date}
                           onChange={(date) => setForm({ ...form, activity_date: date })}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          disabled={renewLocked}
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-600 mb-1">Bill Type</label>
                         <select
                           value={form.bill_type}
+                          disabled={renewLocked}
                           onChange={e => setForm({ ...form, bill_type: e.target.value as any })}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                         >
                           <option value="Tax Invoice">Tax Invoice</option>
                           <option value="Credit Note">Credit Note</option>
@@ -2402,8 +2411,9 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                             <label className="block text-xs font-semibold text-gray-600 mb-1">Voucher Type (auto-voucher)</label>
                             <select
                               value={voucherTypeId}
+                              disabled={renewLocked}
                               onChange={e => setVoucherTypeId(Number(e.target.value) || '')}
-                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                              className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                             >
                               {activeVchTypes.map(t => (
                                 <option key={t.id} value={t.id}>{t.name}</option>
@@ -2417,12 +2427,16 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                         <input
                           type="text"
                           value={form.sof_no}
+                          disabled={renewLocked}
                           onChange={e => setForm({ ...form, sof_no: e.target.value })}
                           placeholder="Enter SOF..."
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                         />
                       </div>
                     </div>
+                    {renewLocked && (
+                      <p className="text-[11px] text-amber-600 -mt-2">You can adjust <b>Rate</b>, <b>Cycle</b> and <b>Mode</b>. Other values are auto-set from the running plan.</p>
+                    )}
 
                     {/* 3. Metrics Row: Type | Users | Rate */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2437,13 +2451,14 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                         <input
                           type="number"
                           value={renewMode === 'purchase' ? form.purchase_units : form.billing_units}
+                          disabled={renewLocked}
                           onChange={e => {
                             const val = e.target.value;
                             renewMode === 'purchase'
                               ? setForm({ ...form, purchase_units: val })
                               : setForm({ ...form, billing_units: val })
                           }}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-mono"
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-mono ${lockCls}`}
                         />
                       </div>
                       <div>
@@ -2511,24 +2526,26 @@ const Activities: React.FC<ActivitiesProps> = ({ viewMode = 'sales' }) => {
                         <label className="block text-xs font-semibold text-gray-600 mb-1">Start Date</label>
                         <DateInput
                           value={(renewMode === 'purchase' ? form.purchase_start_from : form.start_from) || ''}
+                          disabled={renewLocked}
                           onChange={date => {
                             renewMode === 'purchase'
                               ? handlePurchaseStartDateChange(date)
                               : handleStartDateChange(date)
                           }}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-600 mb-1">Expiry Date</label>
                         <DateInput
                           value={(renewMode === 'purchase' ? form.purchase_expiry : form.new_expiry_date) || ''}
+                          disabled={renewLocked}
                           onChange={date => {
                             renewMode === 'purchase'
                               ? setForm({ ...form, purchase_expiry: date })
                               : setForm({ ...form, new_expiry_date: date });
                           }}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          className={`block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${lockCls}`}
                         />
                       </div>
                     </div>
