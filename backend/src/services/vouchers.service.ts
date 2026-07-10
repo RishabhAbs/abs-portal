@@ -632,9 +632,16 @@ export class VouchersService implements OnModuleInit {
                         const signedAmt = ba.direction
                             ? (ba.direction === 'Cr' ? -Math.abs(ba.amount) : Math.abs(ba.amount))
                             : (ba.type === 'Agr.' ? -Math.abs(ba.amount) : Math.abs(ba.amount));
-                        const billname = (!ba.type || ba.type === 'New')
-                            ? (assignedVchNo || ba.refno || null)
-                            : (ba.refno || null);
+                        // "On Account" = NOT allocated to any bill → billname
+                        // NULL. This is also how the type is recovered on load
+                        // (no bill ref → On Account), since the table has no
+                        // type column. Without this, an On Account entry kept
+                        // a stale bill ref and reloaded as "Agr." against it.
+                        const billname = ba.type === 'On Account'
+                            ? null
+                            : (!ba.type || ba.type === 'New')
+                                ? (assignedVchNo || ba.refno || null)
+                                : (ba.refno || null);
                         await this.db.execute(
                             `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
                             [vchId, ledEntryId, ledgerId, billname, signedAmt],
@@ -764,10 +771,13 @@ export class VouchersService implements OnModuleInit {
                         : (ba.type === 'Agr.'
                             ? -Math.abs(ba.amount) * baseSign
                             :  Math.abs(ba.amount) * baseSign);
-                    // For 'New' refs, always use the actual saved vch_no (handles race-bumped numbers)
-                    const billname = (!ba.type || ba.type === 'New')
-                        ? (assignedVchNo || ba.refno || null)
-                        : (ba.refno || null);
+                    // On Account → no bill ref (billname NULL); For 'New' refs,
+                    // always use the actual saved vch_no (handles race-bumped numbers)
+                    const billname = ba.type === 'On Account'
+                        ? null
+                        : (!ba.type || ba.type === 'New')
+                            ? (assignedVchNo || ba.refno || null)
+                            : (ba.refno || null);
                     await this.db.execute(
                         `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
                         [vchId, partyLedEntryId, data.party_ledger_id, billname, signedAmt],
@@ -3361,9 +3371,11 @@ export class VouchersService implements OnModuleInit {
                     const signedAmt = ba.direction
                         ? (ba.direction === 'Cr' ? -Math.abs(ba.amount) : Math.abs(ba.amount))
                         : (ba.type === 'Agr.' ? -Math.abs(ba.amount) : Math.abs(ba.amount));
+                    // On Account → no bill ref, so it reloads as On Account
+                    const billname = ba.type === 'On Account' ? null : (ba.refno || null);
                     await this.db.execute(
                         `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
-                        [vchId, ledEntryId, ledgerId, ba.refno || null, signedAmt], conn,
+                        [vchId, ledEntryId, ledgerId, billname, signedAmt], conn,
                     );
                 }
             }
@@ -3456,9 +3468,11 @@ export class VouchersService implements OnModuleInit {
                 const signedAmt = ba.direction
                     ? (ba.direction === 'Cr' ? -Math.abs(ba.amount) : Math.abs(ba.amount))
                     : (ba.type === 'Agr.' ? -Math.abs(ba.amount) * baseSign : Math.abs(ba.amount) * baseSign);
+                // On Account → no bill ref, so it reloads as On Account
+                const billname = ba.type === 'On Account' ? null : (ba.refno || null);
                 await this.db.execute(
                     `INSERT INTO bill_allocation (vchid, ledentry_id, ledger, billname, amount) VALUES (?, ?, ?, ?, ?)`,
-                    [vchId, partyLedEntryId, data.party_ledger_id, ba.refno || null, signedAmt], conn,
+                    [vchId, partyLedEntryId, data.party_ledger_id, billname, signedAmt], conn,
                 );
             }
         }

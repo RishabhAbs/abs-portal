@@ -1269,7 +1269,10 @@ const Vouchers: React.FC = () => {
             billByBill: rowAllocs.length > 0,
             billAlloc: rowAllocs.map((ba: any) => ({
               id: uid(),
-              type: 'Agr.' as const,
+              // No bill reference stored → it was saved "On Account"; a
+              // present bill name means it's tied to a bill (Agr.). The table
+              // has no type column, so this is how the type round-trips.
+              type: (ba.billname && String(ba.billname).trim()) ? 'Agr.' as const : 'On Account' as const,
               refno: ba.billname || '',
               refSearch: ba.billname || '',
               amount: Math.abs(Number(ba.amount)),
@@ -1340,7 +1343,8 @@ const Vouchers: React.FC = () => {
       if (!isJournal && v.billAllocations?.length) {
         setBillAllocEntries(v.billAllocations.map((ba: any) => ({
           id: uid(),
-          type: 'Agr.' as const,
+          // Present bill name → Agr. (against that bill); none → On Account.
+          type: (ba.billname && String(ba.billname).trim()) ? 'Agr.' as const : 'On Account' as const,
           refno: ba.billname || '',
           refSearch: ba.billname || '',
           amount: Math.abs(Number(ba.amount)),
@@ -4234,7 +4238,10 @@ const Vouchers: React.FC = () => {
                             const currentBalance = +(signedGrandTotal - d.filter(r => r.id !== entry.id).reduce((s, r) => s + (r.direction === 'Cr' ? -(Number(r.amount)||0) : (Number(r.amount)||0)), 0)).toFixed(2);
                             const autoDir = currentBalance >= 0 ? 'Dr' : 'Cr';
                             const autoAmt = Math.abs(currentBalance);
-                            return d.map(r => r.id === entry.id ? newType === 'New' ? { ...r, type: newType, amount: autoAmt, direction: autoDir } : { ...r, type: newType } : r);
+                            return d.map(r => r.id === entry.id
+                              ? newType === 'New' ? { ...r, type: newType, amount: autoAmt, direction: autoDir }
+                              : newType === 'On Account' ? { ...r, type: newType, refno: '', refSearch: '' }
+                              : { ...r, type: newType } : r);
                           })}
                           className="w-full border border-gray-200 rounded text-sm py-1 px-1 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="New">New</option>
@@ -4342,7 +4349,10 @@ const Vouchers: React.FC = () => {
                             const currentBalance = +(signedGrandTotal - d.filter(r => r.id !== entry.id).reduce((s, r) => s + (r.direction === 'Cr' ? -(Number(r.amount)||0) : (Number(r.amount)||0)), 0)).toFixed(2);
                             const autoDir = currentBalance >= 0 ? 'Dr' : 'Cr';
                             const autoAmt = Math.abs(currentBalance);
-                            return d.map(r => r.id === entry.id ? t === 'New' ? { ...r, type: t, amount: autoAmt, direction: autoDir } : { ...r, type: t } : r);
+                            return d.map(r => r.id === entry.id
+                              ? t === 'New' ? { ...r, type: t, amount: autoAmt, direction: autoDir }
+                              : t === 'On Account' ? { ...r, type: t, refno: '', refSearch: '' }
+                              : { ...r, type: t } : r);
                           })}
                           className={`flex-1 py-1.5 font-semibold transition-colors border-r border-gray-200 last:border-r-0 ${
                             entry.type === t ? 'bg-blue-600 text-white' : 'text-gray-500'
