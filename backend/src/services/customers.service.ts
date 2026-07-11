@@ -462,7 +462,15 @@ export class CustomersService implements OnModuleInit {
     }
 
     if (mappedOnly) {
-      conditions.push(`EXISTS (SELECT 1 FROM cloud_mappings cm WHERE cm.customer_id = c.id AND cm.status = 'Active')`);
+      // "Billable" customers for the activity/renew picker: an active server
+      // mapping OR any prior cloud billing activity. A customer that has been
+      // billed before (NEW/Renewal activities) is renewable even if its
+      // mapping row isn't currently flagged Active — otherwise valid
+      // customers like these silently vanish from the renew search.
+      conditions.push(`(
+        EXISTS (SELECT 1 FROM cloud_mappings cm WHERE cm.customer_id = c.id AND cm.status = 'Active')
+        OR EXISTS (SELECT 1 FROM cloud_activities ca WHERE ca.customer_id = c.id)
+      )`);
     }
 
     // Visit Dashboard: hide customers that already have a pending Connect visit
